@@ -122,7 +122,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
     fig.subplots_adjust(left=0.08, right=0.98, bottom=0.05, top=0.9,
                         hspace=0.4, wspace=0.3)
     if save_:
-        string = file_path_ + name_ + '_' + '.png'
+        string = file_path_ + name_ + '.png'
         plt.savefig(string, bbox_inches='tight')
     # plt.show()
 
@@ -166,7 +166,7 @@ def plot_3d_results(results_, metric_name_, save_, file_path_, z_labels_, experi
 
     fig = go.Figure(layout=layout, data=data)
     if save_:
-        string = file_path_ + title + '_' + '.png'
+        string = file_path_ + title + '.png'
         fig.write_image(string)
     # fig.show()
 
@@ -221,7 +221,7 @@ def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save
     else:
         ax.legend(loc='upper right')
     if save_:
-        string = file_path_ + title + '_' + '.png'
+        string = file_path_ + title + '.png'
         plt.savefig(string, bbox_inches='tight')
     # fig.show()
 
@@ -251,7 +251,7 @@ def plot_risk_difference(results_, loss_fully_trained_, model_name_, save_, file
     plt.plot(plot_range, [j for (i, j) in quartiles], '_', markersize=6, c='blue')
 
     if save_:
-        string = file_path_ + name_ + '_' + '.png'
+        string = file_path_ + name_ + '.png'
         plt.savefig(string, bbox_inches='tight')
     # plt.show()
 
@@ -280,7 +280,7 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
 
     plt.plot(plot_range, [i for i in ratio_differences], c='blue')
     if save_:
-        string = file_path_ + name_ + '_' + '.png'
+        string = file_path_ + name_ + '.png'
         plt.savefig(string, bbox_inches='tight')
     # plt.show()
 

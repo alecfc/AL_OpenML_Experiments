@@ -410,9 +410,9 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
     # measure_names = ['Selected Label Ratio', 'AUC']
     dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
     al_str = AL_switcher.get(al_method_).__name__ + ' initial size ' + str(initial_size_) + ' initial ratio ' + str(
-        initial_ratio_) + ' '
+        initial_ratio_)
     ml_str = type(ML_switcher[ml_method_]).__name__
-    string = dataset_str + ' ' + al_str + ' n_queries ' + ml_str + ' for ' + str(n_queries_) + ' queries.'
+    string = dataset_str + ' ' + al_str + ' ' + ml_str + ' for ' + str(n_queries_) + ' queries'
 
     # Plot the bias over time
     loss_results -= ML_results_fully_trained_[ml_method_ - 1]['Log Loss']
@@ -421,7 +421,7 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
 
     # Plot the top selected instances over all executions
     plot_top_selected_instances(selected_instances_table, selected_labels_table, save_results_, file_path_,
-                                string + ' Top Selected Instances')
+                                'Top Instances of ' + string)
 
     selected_labels_table = selected_labels_table.astype(float)
     all_results = list(
@@ -429,7 +429,7 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
          loss_results])
     # all_results = list([selected_labels_table, auc_results])
 
-    measure_names = ['Accuracy', 'F1', 'Recall', 'Precision', "Selected Label Ratio", "AUC",
+    measure_names = ['Accuracy', 'F1', 'Recall', 'Precision', "Label Ratio", "AUC",
                      'Loss Difference']  # , "Feature Importance Consumer", "Feature Importance Producer"]
     measure_names = measure_names[:len(all_results)]
 
@@ -594,7 +594,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         start = time.ctime()
-        run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
+        run_AL_test(X, y, X_df, k_=5, execs_=1, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=0.5, initial_size_=10,
                     ml_method_=ml_method_number, al_method_=al_method,
