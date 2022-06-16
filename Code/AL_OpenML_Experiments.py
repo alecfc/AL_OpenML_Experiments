@@ -594,7 +594,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         start = time.ctime()
-        run_AL_test(X, y, X_df, k_=5, execs_=1, n_queries_=100,
+        run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=0.5, initial_size_=10,
                     ml_method_=ml_method_number, al_method_=al_method,
