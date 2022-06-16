@@ -6,6 +6,7 @@ import xgboost
 from modAL.uncertainty import uncertainty_sampling
 from modAL.density import information_density
 from modAL.utils.selection import shuffled_argmax
+from sklearn.exceptions import NotFittedError
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -56,7 +57,7 @@ def density_sampling(classifier, X_pool, n_instances: int = 1, **predict_proba_k
     try:
         classwise_uncertainty = classifier.predict_proba(X_pool, **predict_proba_kwargs)
     except NotFittedError:
-        return np.ones(shape=(X.shape[0],))
+        return np.ones(shape=(X_pool.shape[0],))
 
     # for each point, select the maximum uncertainty
     uncertainty = 1 - np.max(classwise_uncertainty, axis=1)
@@ -80,7 +81,7 @@ def qbc_sampling(classifier, X_pool):
 # Switcher for selecting the desired classifier
 ML_switcher = {
     1: LogisticRegression(solver='liblinear', n_jobs=-1),
-    2: xgboost.XGBClassifier(eval_metric='error', use_label_encoder=False, n_jobs=-1, tree_method='gpu_hist'),
+    2: xgboost.XGBClassifier(booster='dart', eval_metric='error', n_jobs=-1),
     3: RandomForestClassifier(n_jobs=-1)
 }
 

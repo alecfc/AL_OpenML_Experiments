@@ -250,7 +250,7 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
 # In[23]:
 
 
-@jit
+#@jit
 def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_ratio_, initial_size_, ml_method_,
                 al_method_, qbc_learners_, n_qbc_learners_, save_results_, normalize_data_, prop_performance_,
                 file_path_, ML_results_fully_trained_, exp_subtype_):
@@ -597,7 +597,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         run_AL_test(X, y, X_df, k_=5, execs_=1, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=0.5, initial_size_=10,
-                    ml_method_=3, al_method_=al_method,
+                    ml_method_=ml_method_number, al_method_=al_method,
                     qbc_learners_=[2, 3], n_qbc_learners_=4,
                     save_results_=True, normalize_data_=False,
                     prop_performance_=False,
