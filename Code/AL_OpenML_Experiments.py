@@ -520,7 +520,7 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
         file_path = "../Figures/Class_Imbalance/" + dataset.name + '/' + subsets[idx] + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
-        run_AL_test(X_data, y_list[idx], X_df, k_=5, execs_=1, n_queries_=100,
+        run_AL_test(X_data, y_list[idx], X_df, k_=5, execs_=20, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
                     al_method_=al_method, qbc_learners_=[2, 3],
@@ -568,8 +568,8 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
                                 ML_results_fully_trained_=ML_results_fully_trained,
                                 exp_subtype_=al_method.__name__)
         end = time.ctime()
-        print('started', start)
-        print('finished', end)
+        print('Started', start)
+        print('Finished', end)
     all_dataset_results = read_dataset_results('../Results/AL_Methods/', 100, dataset.name)
 
     for measure_name, measure_results in all_dataset_results[active_learning_methods[0]].items():
@@ -594,7 +594,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         start = time.ctime()
-        run_AL_test(X, y, X_df, k_=5, execs_=1, n_queries_=100,
+        run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=0.5, initial_size_=10,
                     ml_method_=ml_method_number, al_method_=al_method,
@@ -605,8 +605,8 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
                     ML_results_fully_trained_=ML_results_fully_trained,
                     exp_subtype_=type(ML_switcher[ml_method_number]).__name__)
         end = time.ctime()
-        print('started', start)
-        print('finished', end)
+        print('Started', start)
+        print('Finished', end)
     all_dataset_results = read_dataset_results('../Results/ML_Methods/', 100, dataset.name)
     for measure_name, measure_results in all_dataset_results[ml_methods[0]].items():
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
@@ -629,7 +629,7 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
             init_ratio) + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
-        run_AL_test(X, y, X_df, k_=5, execs_=1, n_queries_=100,
+        run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
                     n_instantiations_=1,
                     initial_ratio_=init_ratio, initial_size_=10,
                     ml_method_=ml_method, al_method_=al_method,
@@ -736,9 +736,9 @@ if __name__ == "__main__":
     # plot_aggregate_comparison('Initial_Class_Ratio', agg_measure_results)
 
     #run_openML_test(experiment_='Class_Imbalance')
-    #run_openML_test(experiment_='AL_Methods')
+    run_openML_test(experiment_='AL_Methods')
     run_openML_test(experiment_='ML_Methods')
-    # run_openML_test(experiment_='Initial_Class_Ratio')
+    run_openML_test(experiment_='Initial_Class_Ratio')
     print('Done')
 # Test example
 # confusion_matrix = np.array([[41792,67554,19872,99459],[ 24901,11070,23452,15790],[20190,24793,34254,10582],[90190,24793,34254,20582]])
