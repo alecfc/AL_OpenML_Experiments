@@ -20,7 +20,9 @@ from modAL.uncertainty import uncertainty_sampling
 from modAL.utils.selection import shuffled_argmax
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-
+from libact.query_strategies import UncertaintySampling
+from libact.query_strategies.multiclass import HierarchicalSampling
+from libact.query_strategies import QUIRE
 # from pip command
 
 def ratio_multiplier(y, ratio):
@@ -45,8 +47,12 @@ def random_sampling(classifier, X_pool):
     return query_idx, X_pool[query_idx]
 
 
-# In[5]:
+def hierarchical_sampling(classifier, X_pool):
+    return 0, 0
 
+# In[5]:
+def quire(classifier, X_pool):
+    return 0, 0
 
 # Setting up a density-weighted sampling method given a classifier and a candidate pool of instances to be sampled.
 # By default only one instance is sampled. Multi-instance sampling not supported.
@@ -81,8 +87,8 @@ def qbc_sampling(classifier, X_pool):
 # Switcher for selecting the desired classifier
 ML_switcher = {
     1: LogisticRegression(solver='liblinear', n_jobs=-1),
-    2: xgboost.XGBClassifier(booster='dart', eval_metric='error', n_jobs=-1),
-    3: RandomForestClassifier(n_jobs=-1)
+    2: xgboost.XGBClassifier(booster='dart',tree_method='hist'),
+    3: RandomForestClassifier()
 }
 
 # Switcher for selecting the desired AL method
@@ -91,4 +97,11 @@ AL_switcher = {
     2: uncertainty_sampling,
     3: density_sampling,
     4: qbc_sampling
+}
+
+AL_switcher2 = {
+    1: random_sampling,
+    2: uncertainty_sampling,
+    5: hierarchical_sampling,
+    6: quire
 }

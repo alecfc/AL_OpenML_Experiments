@@ -16,6 +16,9 @@ import pandas as pd
 import seaborn as sn
 # from pip command
 from imblearn.under_sampling import RandomUnderSampler
+from libact.base.dataset import Dataset
+from libact.base.interfaces import Labeler, QueryStrategy
+import libact.models
 from modAL.disagreement import max_disagreement_sampling, vote_entropy_sampling
 from modAL.models import ActiveLearner, Committee
 from numba import vectorize, jit, cuda
@@ -225,19 +228,22 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
     x_initial = []
     y_initial = []
     y = list(y)
+    y_list = [None for i in y]
     while True:
         rand_idx = np.random.choice(range(len(y)), replace=True)
         if count_0 == number_class_0 and count_1 == number_class_1:
-            return np.array(x_initial), np.array(y_initial), x, y
+            return np.array(x_initial), np.array(y_initial), x, y, y_list
         if y[rand_idx] == 0 and (count_0 < number_class_0):
             x_initial.append(x[rand_idx])
             y_initial.append(y[rand_idx])
+            y_list[rand_idx] = y[rand_idx]
             x, y = np.delete(x, rand_idx, axis=0), np.delete(y, rand_idx)
             count_0 += 1
             continue
         elif y[rand_idx] == 1 and (count_1 < number_class_1):
             x_initial.append(x[rand_idx])
             y_initial.append(y[rand_idx])
+            y_list[rand_idx] = y[rand_idx]
             x, y = np.delete(x, rand_idx, axis=0), np.delete(y, rand_idx)
             count_1 += 1
 
@@ -253,7 +259,7 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
 #@jit
 def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_ratio_, initial_size_, ml_method_,
                 al_method_, qbc_learners_, n_qbc_learners_, save_results_, normalize_data_, prop_performance_,
-                file_path_, ML_results_fully_trained_, exp_subtype_):
+                file_path_, ML_results_fully_trained_, exp_subtype_, al_dict_=AL_switcher):
     # Keep track of results for each query. Used later to calculate incremental performance. +1 because the first value is the performance directly after initialization
     accuracy_results = pd.DataFrame(columns=range(n_queries_ + 1))
     macro_f1_results = pd.DataFrame(columns=range(n_queries_ + 1))
@@ -264,10 +270,8 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
     selected_labels_table = pd.DataFrame(columns=range(n_queries_))
     selected_instances_table = pd.DataFrame(columns=range(n_queries_))
     class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
-
     temp_X = X.copy()
     temp_y = y.copy()
-
     # Keep track of feature importance during training.
     feat_importance_cons = pd.DataFrame([], columns=range(n_queries_ + 1), index=range(execs_ * k_))
 
@@ -282,29 +286,32 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
         # Take stratified folds to make sure each fold contains enough instances of the majority class
         skf = StratifiedKFold(n_splits=K, shuffle=True)
         train_set_indices = np.array(list(skf.split(temp_X, temp_y)))
-
         # K-fold cross validation
         for i in range(k_):
-            print("Validating on fold: ", i + 1, "/", K, end="\r")
+            #sys.stdout.write("Validating on fold: ", i + 1, "/", K, end="\r")
+            print('\r',"Validating on fold: ", i + 1, "/", k_)
+            sys.stdout.flush()
             X_train = X[train_set_indices[i][0]]
             y_train = y[train_set_indices[i][0]]
 
             X_test = X[train_set_indices[i][1]]
             y_test = y[train_set_indices[i][1]]
+
             for j in range(n_instantiations_):
 
                 # X_train_copy = X_train.copy()
                 # y_train_copy = y_train.copy()
-
+                predictions = []
+                x_initial, y_initial, X_train_temp, y_train_temp, y_list = determine_initial_set(X_train, y_train,
+                                                                               initial_ratio_,
+                                                                               initial_size_)
+                ds = Dataset(X_train, y_list)
                 if al_method_ == 4:
                     committee_list = []
                     for qbc_model in qbc_learners_:  # qbc_learners
                         for n in range(n_qbc_learners_):  # n_qbc_learners
                             original_estimator = ML_switcher.get(qbc_model)
                             new_estimator = deepcopy(original_estimator)
-                            x_initial, y_initial, X_train, y_train = determine_initial_set(X_train, y_train,
-                                                                                           initial_ratio_,
-                                                                                           initial_size_)
                             committee_member = ActiveLearner(
                                 estimator=new_estimator,
                                 X_training=x_initial, y_training=y_initial
@@ -315,20 +322,40 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                         learner_list=committee_list,
                         query_strategy=QBC_STRATEGY
                     )
+                    prediction = learner.predict(X_test)
+                elif al_method_ == 5:
+                    model = libact.models.LogisticRegression(C=0.1)
+                    sub_qs = UncertaintySampling(
+                        dataset=ds, method='sm', model=libact.models.LogisticRegression(C=0.1))
+                    learner = HierarchicalSampling(
+                        dataset=ds, # Dataset object
+                        classes=[0,1],
+                        active_selecting=True,
+                        subsample_qs=sub_qs
+                    )
+                    model.train(ds)
+                    # Make first set of predictions (before querying)
+                    prediction = model.predict(X_test)
+                elif al_method_ == 6:
+                    model = libact.models.LogisticRegression(C=0.1)
+                    learner = QUIRE(
+                        dataset=ds # Dataset object
+                    )
+                    model.train(ds)
+                    # Make first set of predictions (before querying)
+                    prediction = model.predict(X_test)
                 else:
                     # print(x_initial)
                     # print(y_initial)
-                    x_initial, y_initial, X_train, y_train = determine_initial_set(X_train, y_train, initial_ratio_,
+                    x_initial, y_initial, X_train, y_train, y_list = determine_initial_set(X_train, y_train, initial_ratio_,
                                                                                    initial_size_)
                     learner = ActiveLearner(
                         estimator=deepcopy(model),
                         query_strategy=AL_switcher.get(al_method_),
                         X_training=x_initial, y_training=y_initial
                     )
-
-                # Make first set of predictions (before querying)
-                predictions = []
-                prediction = learner.predict(X_test)
+                    # Make first set of predictions (before querying)
+                    prediction = learner.predict(X_test)
 
                 unqueried_score_single = accuracy_score(y_test, prediction)
                 unqueried_macro_f1_single = f1_score(y_test, prediction, average='macro')
@@ -352,13 +379,21 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                 loss_history = [unqueried_loss_single]
 
                 for idx in range(n_queries_):
-                    # Query instance using AL method
-                    query_idx, query_instance = learner.query(X_train)
+                    if al_method_ == 5 or al_method_ == 6:
+                        query_idx = learner.make_query()
+                        ds.update(query_idx, y_train[query_idx])
+                        model.train(ds)
+                        predictions = model.predict(X_test)
+                    else:
+                        # Query instance using AL method
+                        query_idx, query_instance = learner.query(X_train)
 
-                    X_temp, y_temp = X_train[query_idx].reshape(1, -1), y_train[query_idx].reshape(1, )
+                        X_temp, y_temp = X_train[query_idx].reshape(1, -1), y_train[query_idx].reshape(1, )
 
-                    # Training a separate classifier (producer) used for selecting queries
-                    learner.teach(X=X_temp, y=y_temp)
+                        # Training a separate classifier (producer) used for selecting queries
+                        learner.teach(X=X_temp, y=y_temp)
+                        # Predict on test set
+                        predictions = learner.predict(X_test)
 
                     # For measuring performance in terms of label selection
                     selected_training_instance_labels = np.append(selected_training_instance_labels, y_train[query_idx])
@@ -369,12 +404,6 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                     # For measuring frequencies of selection of specific instances over the course of learning
                     instance_freq.iloc[execs][query_idx] += 1
                     # print(instance_freq.iloc[idx][query_idx])
-
-                    # Remove the queried instance from the unlabeled pool.
-                    X_train, y_train = np.delete(X_train, query_idx, axis=0), np.delete(y_train, query_idx)
-
-                    # Predict on test set
-                    predictions = learner.predict(X_test)
 
                     # Calculate and report our model's accuracy.
                     model_accuracy = accuracy_score(y_test, predictions)
@@ -393,6 +422,10 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                     auc_history.append(model_auc)
                     loss_history.append(model_loss)
 
+                    if al_method_ < 5:
+                        # Remove the queried instance from the unlabeled pool.
+                        X_train, y_train = np.delete(X_train, query_idx, axis=0), np.delete(y_train, query_idx)
+
                 # Save the specific labels chosen at each training point
                 selected_labels_table = selected_labels_table.append(pd.Series(selected_training_instance_labels),
                                                                      ignore_index=True)
@@ -409,7 +442,7 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
 
     # measure_names = ['Selected Label Ratio', 'AUC']
     dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
-    al_str = AL_switcher.get(al_method_).__name__ + ' initial size ' + str(initial_size_) + ' initial ratio ' + str(
+    al_str = al_dict_.get(al_method_).__name__ + ' initial size ' + str(initial_size_) + ' initial ratio ' + str(
         initial_ratio_)
     ml_str = type(ML_switcher[ml_method_]).__name__
     string = dataset_str + ' ' + al_str + ' ' + ml_str + ' for ' + str(n_queries_) + ' queries'
@@ -441,7 +474,7 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                 "../Results/" + EXP_TYPE + '/' + exp_subtype_ + '/' + measure_name + '/' + measure_name + ' of ' + string + ".pkl")
         plot_results(X, result, measure_name, ML_results_fully_trained, measure_name + ' of ' + string, al_method_,
                      ml_method_, save_results_, normalize_data_, prop_performance_, file_path_,
-                     data_title_=dataset.name)
+                     data_title_=dataset.name, al_dict_=al_dict_)
 
 
 def dataset_performance_measure_results(filepath_, df_measure_results_, dataset_name_):
@@ -464,7 +497,7 @@ def read_dataset_results(base_filepath_, n_queries_, dataset_name_):
                            'F1': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'Recall': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'Precision': pd.DataFrame(columns=range(n_queries_ + 1)),
-                           "Selected Label Ratio": pd.DataFrame(columns=range(n_queries_)),
+                           "Label Ratio": pd.DataFrame(columns=range(n_queries_)),
                            "AUC": pd.DataFrame(columns=range(n_queries_ + 1)),
                            "Loss Difference": pd.DataFrame(columns=range(n_queries_ + 1))}
     df_results = {}
@@ -481,7 +514,7 @@ def read_aggregate_results(base_filepath_, n_queries_):
                            'F1': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'Recall': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'Precision': pd.DataFrame(columns=range(n_queries_ + 1)),
-                           "Selected Label Ratio": pd.DataFrame(columns=range(n_queries_)),
+                           "Label Ratio": pd.DataFrame(columns=range(n_queries_)),
                            "AUC": pd.DataFrame(columns=range(n_queries_ + 1)),
                            "Loss Difference": pd.DataFrame(columns=range(n_queries_ + 1))}
     agg_results = {}
@@ -506,8 +539,7 @@ def compare_results_single_dataset(all_dataset_results_, file_path_, measure_nam
                   experiment_type_=experiment_type_,
                   save_=True, file_path_=file_path_, dataset_name_=dataset.name)
     plot_multiple(measure_results, measure_name_, setting_names_=setting_names_, experiment_type_=experiment_type_,
-                  save_=True,
-                  file_path_=file_path_, dataset_name_=dataset_name_)
+                  save_=True, file_path_=file_path_, dataset_name_=dataset_name_)
 
 
 def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results_fully_trained):
@@ -542,17 +574,17 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
 
 def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
     # Iterate through all active learning methods
-    subsets = [1,2,3,4]
+    #active_learning_methods = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling',
+    #                           'hierarchical_sampling', 'quire']
     active_learning_methods = []
-    for idx, subset_number in enumerate(subsets):
-        active_learning_methods.append(AL_switcher[subset_number].__name__)
-    for al_method_number, al_method in AL_switcher.items():
+    al_dict = AL_switcher
+    for al_method_number, al_method in al_dict.items():
+        active_learning_methods.append(al_method.__name__)
         print('Evaluating', al_method.__name__, 'using the', type(ML_switcher[ml_method]).__name__, 'classifier')
         file_path = "../Figures/AL_Methods/" + dataset.name + '/' + al_method.__name__ + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
-        al_method_number = 4
-        if al_method_number == 4:
+        if al_method_number == 4 or al_method_number == 6:
             execs = 5
         else:
             execs = 20
@@ -566,17 +598,17 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
                                 prop_performance_=False,
                                 file_path_=file_path,
                                 ML_results_fully_trained_=ML_results_fully_trained,
-                                exp_subtype_=al_method.__name__)
+                                exp_subtype_=al_method.__name__, al_dict_=al_dict)
         end = time.ctime()
-        print('Started', start)
-        print('Finished', end)
+        print('started', start)
+        print('finished', end)
     all_dataset_results = read_dataset_results('../Results/AL_Methods/', 100, dataset.name)
 
     for measure_name, measure_results in all_dataset_results[active_learning_methods[0]].items():
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/AL_Methods/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='AL Methods',
-                                       setting_names_=active_learning_methods, dataset_name_=dataset.name)
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name)
 
 # In[26]:
 
@@ -605,8 +637,8 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
                     ML_results_fully_trained_=ML_results_fully_trained,
                     exp_subtype_=type(ML_switcher[ml_method_number]).__name__)
         end = time.ctime()
-        print('Started', start)
-        print('Finished', end)
+        print('started', start)
+        print('finished', end)
     all_dataset_results = read_dataset_results('../Results/ML_Methods/', 100, dataset.name)
     for measure_name, measure_results in all_dataset_results[ml_methods[0]].items():
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
@@ -639,9 +671,9 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
                     file_path_=file_path,
                     ML_results_fully_trained_=ML_results_fully_trained,
                     exp_subtype_='Initial class ratio ' + str(init_ratio))
-    all_dataset_results = read_dataset_results('../Results/ML_Methods/', 100, dataset.name)
+    all_dataset_results = read_dataset_results('../Results/Initial_Class_Ratio/', 100, dataset.name)
 
-    for measure_name, measure_results in all_dataset_results['Initial class ratio' + class_ratios[0]].items():
+    for measure_name, measure_results in all_dataset_results['Initial class ratio ' + str(class_ratios[0])].items():
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/Initial_Class_Ratio/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='Initial Class Ratio',
@@ -695,7 +727,7 @@ def run_openML_test(experiment_):
     performance_results = []
     n_queries = 100
     ml_method = 1
-    al_method = 2
+    al_method = 3
     global dataset
     global EXP_TYPE
     EXP_TYPE = experiment_
@@ -720,6 +752,10 @@ def run_openML_test(experiment_):
         if experiment_ == 'Initial_Class_Ratio':
             init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_trained)
 
+    agg_measure_results = read_aggregate_results('../Results/'+experiment_+'/', n_queries)
+    plot_aggregate_results(experiment_, agg_measure_results)
+    plot_aggregate_comparison(experiment_, agg_measure_results)
+
     # for
     #    plot_aggregate_graphs()
 
@@ -728,17 +764,21 @@ if __name__ == "__main__":
     # This is done based on the dataset name 'cylinder-bands',
     # amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
     # ozone-level-8hr:2534, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
-    dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-     'kr-vs-kp', 'Bioresponse','spambase', 'wilt', 'churn', 'mushroom', 'PhishingWebsites']
-    #dataset_list = ['churn']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
+    #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+    # 'kr-vs-kp', 'Bioresponse','spambase', 'wilt', 'churn', 'mushroom', 'PhishingWebsites']
+    dataset_list = ['churn']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
     # agg_measure_results = read_aggregate_results('../Results/Initial_Class_Ratio/', 100)
     # plot_aggregate_results('Initial_Class_Ratio', agg_measure_results)
     # plot_aggregate_comparison('Initial_Class_Ratio', agg_measure_results)
 
     #run_openML_test(experiment_='Class_Imbalance')
     run_openML_test(experiment_='AL_Methods')
-    run_openML_test(experiment_='ML_Methods')
-    run_openML_test(experiment_='Initial_Class_Ratio')
+    #run_openML_test(experiment_='ML_Methods')
+    #run_openML_test(experiment_='Initial_Class_Ratio')
+    #agg_measure_results = read_aggregate_results('../Results/AL_Methods/', 100)
+    #plot_aggregate_results('AL_Methods', agg_measure_results)
+    #plot_aggregate_comparison('AL_Methods', agg_measure_results)
+
     print('Done')
 # Test example
 # confusion_matrix = np.array([[41792,67554,19872,99459],[ 24901,11070,23452,15790],[20190,24793,34254,10582],[90190,24793,34254,20582]])

@@ -24,7 +24,7 @@ from AL_methods import *
 # Method for plotting the saved results as figures.
 def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, al_method_, ml_method_, save_=False,
                  normalize_data_=False,
-                 prop_performance_=False, file_path_='../Figures/', data_title_=''):
+                 prop_performance_=False, file_path_='../Figures/', data_title_='', al_dict_=AL_switcher):
     mean_performance = results_.describe().loc[['mean'], :].to_numpy()[0]
     lower_quartiles = results_.describe().loc[['25%'], :].to_numpy()[0]
     upper_quartiles = results_.describe().loc[['75%'], :].to_numpy()[0]
@@ -54,7 +54,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
                 string = file_path_ + name_ + '_' + '.png'
                 plt.savefig(string, bbox_inches='tight')
             return
-        if measure_name_ == "Selected Label Ratio":
+        if measure_name_ == "Label Ratio":
             ax.plot(mean_performance)
         if prop_performance_ and measure_name_ != "Selected Label Ratio":
             result_dict = ML_results_fully_trained_[ml_method_]
@@ -80,13 +80,13 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
 
     ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, integer=True))
 
-    if measure_name_ == "Selected Label Ratio":
+    if measure_name_ == "Label Ratio":
         ax.set_ylim(bottom=0, top=1, auto=False)
     else:
         ax.set_ylim(bottom=0.4, top=1, auto=False)  # bottom=0, top=1
     ax.grid(True)
 
-    ax.set_title(data_title_ + ' Incremental Classification ' + measure_name_ + ": " + AL_switcher[
+    ax.set_title(data_title_ + ' Incremental Classification ' + measure_name_ + ": " + al_dict_[
         al_method_].__name__ + ' using ' + type(ML_switcher[ml_method_]).__name__ + ' classifier')  # change later
 
     ax.set_ylabel('Classification ' + measure_name_)
@@ -114,7 +114,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
             n = text_file.write(str(global_score))
             text_file.close()
 
-    if measure_name_ != "Selected Label Ratio":
+    if measure_name_ != "Label Ratio":
         plt.plot((plot_range, plot_range), ([i for (i, j) in quartiles], [j for (i, j) in quartiles]), c='black')
         plt.plot(plot_range, [i for (i, j) in quartiles], '_', markersize=6, c='blue')
         plt.plot(plot_range, [j for (i, j) in quartiles], '_', markersize=6, c='blue')
@@ -177,30 +177,31 @@ def plot_3d_results(results_, metric_name_, save_, file_path_, z_labels_, experi
 def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save_, file_path_, dataset_name_):
     sn.set_theme()
     data = []
-    colors = ['#B42B2D', '#0E84FA', '#FAAB0E', '#121110']
+    colors = ['#B42B2D', '#0E84FA', '#FAAB0E', '#121110', '#249338', '#894CB6']
     fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
 
-    title = "Comparison of " + metric_name_ + " for the " + experiment_type_ + ' experiment on the ' + dataset_name_ + ' dataset'
+    title = "Comparison of " + metric_name_ + " for the " + experiment_type_ + ' experiment on ' + dataset_name_
     ax.set_title(title)
     ax.set_ylabel('Classification ' + metric_name_)
     ax.set_xlabel('Query iteration')
-    if metric_name_ == "Selected Label Ratio":
+    if metric_name_ == "Label Ratio":
         ax.set_ylim(bottom=0, top=1, auto=False)
     else:
-        ax.set_ylim(bottom=0.4, top=1, auto=False)  # bottom=0, top=1
+        if metric_name_ != "Loss Difference":
+            ax.set_ylim(bottom=0.4, top=1, auto=False)  # bottom=0, top=1
     ax.grid(True)
-    ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=10))
-    ax.yaxis.set_major_formatter(mpl.ticker.PercentFormatter(xmax=1))
 
-
-    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, integer=True))
+    if metric_name_ != "Loss Difference":
+        ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=10))
+        ax.yaxis.set_major_formatter(mpl.ticker.PercentFormatter(xmax=1))
+        ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, integer=True))
 
     for idx, result in enumerate(results_):
         mean_performance = result.describe().loc[['mean'], :].to_numpy()[0]
         lower_quartiles = result.describe().loc[['25%'], :].to_numpy()[0]
         upper_quartiles = result.describe().loc[['75%'], :].to_numpy()[0]
 
-        if metric_name_ != "Selected Label Ratio":
+        if metric_name_ != "Label Ratio":
             for j, quartile_result in enumerate(lower_quartiles):
                 if j % 5 != 0:
                     upper_quartiles[j] = mean_performance[j]
@@ -211,12 +212,12 @@ def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save
         quartiles = list(zip(lower_quartiles, upper_quartiles))
         ax.plot(mean_performance, c=colors[idx])
         ax.scatter(plot_range, mean_performance, s=13, c=colors[idx], label=setting_names_[idx])
-        if metric_name_ != "Selected Label Ratio":
+        if metric_name_ != "Label Ratio":
             plt.plot((plot_range, plot_range), ([i for (i, j) in quartiles], [j for (i, j) in quartiles]), c=colors[idx])
             plt.plot(plot_range, [i for (i, j) in quartiles], '_', markersize=6, c=colors[idx])
             plt.plot(plot_range, [j for (i, j) in quartiles], '_', markersize=6, c=colors[idx])
 
-    if metric_name_ != "Selected Label Ratio":
+    if metric_name_ != "Label Ratio":
         ax.legend(loc='lower right')
     else:
         ax.legend(loc='upper right')
@@ -322,14 +323,7 @@ def plot_top_selected_instances(instances, labels, save_, file_path_, name_):
 def plot_aggregate_results(experiment_name, aggregate_ci_results):
     print('Aggregate Results:')
     for experiment_type, experiment_results in aggregate_ci_results.items():
-        if experiment_name == 'AL_Methods':
-            experiment_title = AL_switcher[experiment_type].__name__
-        elif experiment_name == 'ML_Methods':
-            experiment_title = type(ML_switcher[experiment_type]).__name__
-        elif experiment_name == 'Initial_Class_Ratio':
-            experiment_title = 'Initial Class Ratio ' + str(experiment_type)
-        else:
-            experiment_title = experiment_type
+        experiment_title = experiment_type
         file_path = "../Figures/" + experiment_name + "/Aggregate_Results/" + experiment_title + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
@@ -350,11 +344,11 @@ def plot_aggregate_comparison(experiment_name, aggregate_ci_results):
     methods = []
     if experiment_name == 'AL_Methods':
         for idx, subset_number in enumerate(aggregate_list):
-            methods.append(AL_switcher[subset_number].__name__)
+            methods.append(subset_number)
         aggregate_list = methods
     elif experiment_name == 'ML_Methods':
         for idx, subset_number in enumerate(aggregate_list):
-            methods.append(type(ML_switcher[subset_number]).__name__)
+            methods.append(subset_number)
         aggregate_list = methods
     for performance_metric_name, performance in stored_performance:
         file_path = "../Figures/" + experiment_name + "/Aggregate_Results/" + performance_metric_name + '/'
@@ -368,8 +362,7 @@ def plot_aggregate_comparison(experiment_name, aggregate_ci_results):
         file_name = 'All Datasets Aggregate ' + performance_metric_name + ' Comparison for ' + experiment_name
         plot_multiple(results_for_performance_metric, performance_metric_name, setting_names_=aggregate_list,
                       experiment_type_=experiment_name,
-                      save_=True, file_path_=file_path,
-                      name_=file_name)
+                      save_=True, file_path_=file_path, dataset_name_='aggregate')
 
 
 # In[ ]:
