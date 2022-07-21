@@ -8,11 +8,17 @@ import warnings
 from collections import Counter
 from copy import deepcopy
 import time
+import torch
+import torch.optim as optim
+import joblib
+sys.modules['sklearn.externals.joblib'] = joblib
+import torch.utils.data as data_utils
 from timeit import default_timer as timer
 import matplotlib.pyplot as plt
 import numpy as np
 import openml
 import pandas as pd
+from sklearn.model_selection import KFold
 import seaborn as sn
 # from pip command
 from imblearn.under_sampling import RandomUnderSampler
@@ -29,7 +35,8 @@ from sklearn.preprocessing import LabelEncoder
 from scipy.io import arff
 from AL_methods import *
 from AL_plot_results import *
-
+from AL_dataloader import *
+from AL_utils import *
 warnings.filterwarnings(
     'ignore')  # precision often has cases where there are no predictions for the minority class, which leads to zero-division. This keeps that warning from showing up.
 
@@ -252,12 +259,239 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
 # y=np.array([0,1,0,1,1,0,1,0,0,1,0,1])
 # x, y = determine_initial_set(x, y, 0.2, 6)
 
+def train(
+    model,
+    train_loader,
+    optimizer,
+    weighting_scheme,
+    _run=None,
+    for_acquisition=False
+):
+    """
+    Helper function to execute a single epoch of training.
+    """
+    model.train()
+    # avg_train_loss = 0
+    raw_loss = torch.nn.NLLLoss()
+
+    # losses = []
+    for batch_idx, (data_N_C_H_W, target, weight) in enumerate(train_loader):
+        data_N_C_H_W = data_N_C_H_W.cuda()
+        target = target.cuda()
+        weight = weight.cuda()
+
+        optimizer.zero_grad()
+
+        prediction = model(data_N_C_H_W)  # Always uses 1 when not doing consistent.
+
+
+        loss = (weight * raw_loss(prediction, target)).mean(0)
+
+        loss.backward()
+        # avg_train_loss = (avg_train_loss * batch_idx + loss.item()) / (batch_idx + 1)
+        optimizer.step()
+
+        # losses.append(loss.item())
+        # print(f'Epoch: {epoch}:')
+    # print(f'Train Set: Average Loss: {avg_train_loss:.6f}')
+
+def evaluate(model, eval_loader):
+    """We actually only want eval mode on when we're doing acquisition because of how consistent dropout works.
+    """
+    model_arch = None
+    n_samples = 8
+    weighting_scheme = 'refined'
+    model.train()
+
+    nll = 0
+    weighted_nll = 0
+    correct = 0
+
+    with torch.no_grad():
+        for data_N_C_H_W, target_N, weight_N in eval_loader:
+            data_N_C_H_W = data_N_C_H_W.cuda()
+            target_N = target_N.cuda()
+            weight_N = weight_N.cuda()
+
+            samples_V_N = torch.stack(
+                [model(data_N_C_H_W) for _ in range(n_samples)]
+            )
+            prediction_N = torch.logsumexp(samples_V_N, dim=0) - math.log(n_samples)
+
+            raw_nll_N = F.nll_loss(prediction_N, target_N, reduction="none")
+            nll += torch.sum(raw_nll_N)
+            if weighting_scheme == "none":
+                weighted_nll = 0.
+            else:
+                weighted_nll += torch.sum(weight_N * raw_nll_N)
+
+            # get the index of the max log-probability
+            class_prediction = prediction_N.max(1, keepdim=True)[1]
+            correct += (
+                class_prediction.eq(target_N.view_as(class_prediction)).sum().item()
+            )
+
+    nll /= len(eval_loader.dataset)
+    if weighting_scheme == "none":
+        pass
+    else:
+        weighted_nll /= len(eval_loader.dataset)
+        weighted_nll = weighted_nll.item()
+    percentage_correct = 100.0 * correct / len(eval_loader.dataset)
+
+    return nll.item(), weighted_nll, percentage_correct
+
+def train_to_convergence(
+    model,
+    train_loader,
+    validation_loader,
+    for_acquisition,
+):
+    """
+    Helper function to train multiple epochs until the set limit is reached or we lose patience.
+    """
+    print(f"Beginning training with {len(train_loader.dataset)} training points and {len(validation_loader.dataset)} validation.")
+    best = np.inf
+    best_model = model
+    patience = 0
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=0.0001,
+        weight_decay=0.0001,
+    )
+    print(f"Digits used: {len(train_loader.dataset)}")
+    for epoch in range(100):
+        train(
+            model,
+            train_loader,
+            optimizer,
+            'refined',
+            _run=None,
+            for_acquisition=for_acquisition
+        )
+        valid_nll, _, valid_accuracy = evaluate(
+            model,
+            validation_loader
+        )
+        # _run.log_scalar("evaluation_loss", valid_loss)
+        # _run.log_scalar("evaluation_accuracy", valid_accuracy)
+        print(
+            f"Epoch {epoch:0>3d} eval: Val nll: {valid_nll:.4f}, Val Accuracy: {valid_accuracy}"
+        )
+
+        if valid_nll < best:
+            best = valid_nll
+            best_model = deepcopy(model)
+            patience = 0
+        else:
+            patience += 1
+
+        if patience >= 20:
+            print(f"Patience reached - stopping training. Best was {best}")
+            break
+    print("Completed training", end="")
+
+    print(".")
+    return best_model
+
 
 # In[23]:
 
+def run_AL_test_plain_levelled(X, y, X_df, k_, execs_, n_queries_, initial_ratio_, initial_size_, save_results_, file_path_):
+    accuracy_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    macro_f1_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    recall_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    precision_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    auc_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    loss_results = pd.DataFrame(columns=range(n_queries_ + 1))
+    selected_labels_table = pd.DataFrame(columns=range(n_queries_))
+    selected_instances_table = pd.DataFrame(columns=range(n_queries_))
+    skf = StratifiedKFold(n_splits=K, shuffle=True)
+    overall_weighted_risks = []
+    overall_unweighted_risks = []
+    overall_rb_risks = []
+    overall_true_risks = []
+    overall_refined_rb_risks = []
+    overall_uniform_risks = []
+    train_set_indices = np.array(list(skf.split(X, y)))
+
+    for execs in range(execs_):
+        weighted_risk = []
+        # K-fold cross validation
+        for i in range(k_):
+            # sys.stdout.write("Validating on fold: ", i + 1, "/", K, end="\r")
+            print('\r', "Validating on fold: ", i + 1, "/", k_)
+            sys.stdout.flush()
+            X_train = X[train_set_indices[i][0]]
+            y_train = y[train_set_indices[i][0]]
+
+            X_test = X[train_set_indices[i][1]]
+            y_test = y[train_set_indices[i][1]]
+            dataset = OpenMLDataset(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test)
+            temp_tensor = torch.from_numpy(X_train)
+            model = ML_switcher.get(1)
+            dataset.set_model(model)
+            temp = np.expand_dims(dataset.pool_dataset[1], axis=1)
+            model.fit(dataset.pool_dataset[1], dataset.pool_dataset[0])
+
+
+            for idx in range(n_queries_):
+
+                sampled_idx, probability_distribution = dataset.proposal_epsilon_greedy()
+                dataset.acquire_point(sampled_idx, probability_distribution)
+                # Estimate the risk of the fixed model using those points.
+                if idx > 0:
+                    weighted_risk.append(dataset.estimate_risk(weighting_scheme="refined"))
+                #if (idx % 20 == 1) and execs == 1:
+                #    dataset.plot_weights()
+            overall_weighted_risks.append(weighted_risk)
+
+    true_risk = dataset.true_risk()
+    plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks,
+              overall_uniform_risks, true_risk, execs_)
+
+def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks, overall_uniform_risks, true_risk, n_runs):
+    c = sns.color_palette()
+    def series(risks):
+        overall_risks_array = np.array(risks)
+        risk_mean = np.mean(overall_risks_array, axis=0)
+        if overall_risks_array.shape[0] != 1:
+            risk_std = np.std(overall_risks_array, axis=0)
+            risk_se = risk_std / np.sqrt(overall_risks_array.shape[0] -1)
+        else:
+            risk_se = 0
+        x = np.arange(len(risk_mean))
+        return x, risk_mean, risk_se
+
+    weighted_x, weighted_mean, weighted_se = series(overall_weighted_risks)
+    plt.plot(weighted_x, weighted_mean, label="Weighted")
+    plt.fill_between(weighted_x, weighted_mean + weighted_se, weighted_mean - weighted_se, alpha=0.3)
+
+    # unweighted_x, unweighted_mean, unweighted_se = series(overall_unweighted_risks)
+    # plt.plot(unweighted_x, unweighted_mean, label="Unweighted")
+    # plt.fill_between(unweighted_x, unweighted_mean + unweighted_se, unweighted_mean - unweighted_se, alpha=0.3)
+
+    rb_x, rb_mean, rb_se = series(overall_rb_risks)
+    plt.plot(rb_x, rb_mean, label="Rao-Blackwell")
+    plt.fill_between(rb_x, rb_mean + rb_se, rb_mean - rb_se, alpha=0.3)
+
+    r_rb_x, r_rb_mean, r_rb_se = series(overall_refined_rb_risks)
+    plt.plot(r_rb_x, r_rb_mean, label="Refined Rao-Blackwell")
+    plt.fill_between(r_rb_x, r_rb_mean + r_rb_se, r_rb_mean - r_rb_se, alpha=0.3)
+
+    # uniform_x, uniform_mean, uniform_se = series(overall_uniform_risks)
+    # plt.plot(uniform_x, uniform_mean, label="Uniform")
+    # plt.fill_between(uniform_x, uniform_mean + uniform_se, uniform_mean - uniform_se, alpha=0.3)
+
+    plt.hlines(true_risk, 0, len(weighted_x), label="True Risk")
+    plt.xlabel("Number of Sampled Points")
+    plt.ylabel("Empirical Risk")
+    plt.title("Empirical Risk Convergence Under Different Weighting Schemes")
+    plt.legend()
+    plt.savefig(f"plots/toy_fn_comparison_{n_runs}.pdf", bbox_inches="tight", dpi=300)
 
 #@jit
-def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_ratio_, initial_size_, ml_method_,
+def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_class_ratio_, initial_ratio_, initial_size_, ml_method_,
                 al_method_, qbc_learners_, n_qbc_learners_, save_results_, normalize_data_, prop_performance_,
                 file_path_, ML_results_fully_trained_, exp_subtype_, al_dict_=AL_switcher):
     # Keep track of results for each query. Used later to calculate incremental performance. +1 because the first value is the performance directly after initialization
@@ -269,6 +503,8 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
     loss_results = pd.DataFrame(columns=range(n_queries_ + 1))
     selected_labels_table = pd.DataFrame(columns=range(n_queries_))
     selected_instances_table = pd.DataFrame(columns=range(n_queries_))
+    overall_weighted_risks = []
+
     class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     temp_X = X.copy()
     temp_y = y.copy()
@@ -282,7 +518,7 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
     model = ML_switcher.get(ml_method_)
     # Perform K-fold validation for EXECUTIONS number of times. This gives more total repetitions, and thus a smoother view of learning performance
     for execs in range(execs_):
-
+        weighted_risk = []
         # Take stratified folds to make sure each fold contains enough instances of the majority class
         skf = StratifiedKFold(n_splits=K, shuffle=True)
         train_set_indices = np.array(list(skf.split(temp_X, temp_y)))
@@ -302,10 +538,11 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                 # X_train_copy = X_train.copy()
                 # y_train_copy = y_train.copy()
                 predictions = []
-                x_initial, y_initial, X_train_temp, y_train_temp, y_list = determine_initial_set(X_train, y_train,
-                                                                               initial_ratio_,
-                                                                               initial_size_)
-                ds = Dataset(X_train, y_list)
+                x_initial, y_initial, X_temp, y_train, y_list = determine_initial_set(X_train, y_train,
+                                                                                       initial_ratio_,
+                                                                                       initial_size_)
+                if al_method_ == 5 or al_method_ == 6:
+                    ds = libact.base.dataset.Dataset(X_train, y_list)
                 if al_method_ == 4:
                     committee_list = []
                     for qbc_model in qbc_learners_:  # qbc_learners
@@ -343,6 +580,11 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                     )
                     model.train(ds)
                     # Make first set of predictions (before querying)
+                    prediction = model.predict(X_test)
+                elif al_method_ == 7:
+                    weighted_dataset = OpenMLDataset(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, X_initial=x_initial, y_initial=y_initial)
+                    weighted_dataset.set_model(model)
+                    model.fit(weighted_dataset.acquired_dataset[1], weighted_dataset.acquired_dataset[0])
                     prediction = model.predict(X_test)
                 else:
                     # print(x_initial)
@@ -383,6 +625,13 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
                         query_idx = learner.make_query()
                         ds.update(query_idx, y_train[query_idx])
                         model.train(ds)
+                        predictions = model.predict(X_test)
+                    elif al_method_ == 7:
+                        query_idx, probability_distribution = weighted_dataset.proposal_epsilon_greedy()
+                        weighted_dataset.acquire_point(query_idx, probability_distribution)
+                        model.fit(weighted_dataset.acquired_dataset[1], weighted_dataset.acquired_dataset[0])
+                        query_idx = query_idx[0].max()
+                        weighted_risk.append(weighted_dataset.estimate_risk(weighting_scheme="refined"))
                         predictions = model.predict(X_test)
                     else:
                         # Query instance using AL method
@@ -451,6 +700,8 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, initial_r
     loss_results -= ML_results_fully_trained_[ml_method_ - 1]['Log Loss']
     plot_bias(y_initial, selected_labels_table, class_ratio, save_results_, file_path_, 'Bias of ' + string,
               dataset_name_=dataset.name)
+    plot_class_per_sample(labels_=selected_labels_table, original_class_ratio_=class_ratio, name_=string, save_=True,
+                          file_path_=file_path_, dataset_name_=dataset.name)
 
     # Plot the top selected instances over all executions
     plot_top_selected_instances(selected_instances_table, selected_labels_table, save_results_, file_path_,
@@ -546,6 +797,7 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
     # Get subsamples of OpenML dataset
     # Iterate through the three subsets with one AL method and one ML method
     subsets = ['Original', 'Balanced', '75-25', '95-5']
+    original_class_ratio = round(Counter(y_list[0])[1] / (Counter(y_list[0])[0] + Counter(y_list[0])[1]), 3)
     for idx, X_data in enumerate(X_list):
         print('Evaluating on ' + subsets[idx] + ' class ratio data using', AL_switcher[al_method].__name__, 'and the',
               type(ML_switcher[ml_method]).__name__, 'classifier')
@@ -553,7 +805,7 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         run_AL_test(X_data, y_list[idx], X_df, k_=5, execs_=20, n_queries_=100,
-                    n_instantiations_=1,
+                    n_instantiations_=1, original_class_ratio_=original_class_ratio,
                     initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
                     al_method_=al_method, qbc_learners_=[2, 3],
                     n_qbc_learners_=4,
@@ -569,7 +821,7 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/Class_Imbalance/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='Class Imbalance',
-                                       setting_names_=subsets, dataset_name_=dataset.name)
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name)
 
 
 def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
@@ -577,8 +829,10 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
     #active_learning_methods = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling',
     #                           'hierarchical_sampling', 'quire']
     active_learning_methods = []
-    al_dict = AL_switcher
+    al_dict = AL_switcher2
+    original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for al_method_number, al_method in al_dict.items():
+        al_method_number = 6
         active_learning_methods.append(al_method.__name__)
         print('Evaluating', al_method.__name__, 'using the', type(ML_switcher[ml_method]).__name__, 'classifier')
         file_path = "../Figures/AL_Methods/" + dataset.name + '/' + al_method.__name__ + '/'
@@ -587,10 +841,10 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
         if al_method_number == 4 or al_method_number == 6:
             execs = 5
         else:
-            execs = 20
+            execs = 1
         start = time.ctime()
         run_AL_test(X, y, X_df, k_=5, execs_=execs, n_queries_=100,
-                                n_instantiations_=1,
+                                n_instantiations_=1,original_class_ratio_=original_class_ratio,
                                 initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
                                 al_method_=al_method_number, qbc_learners_=[2, 3],
                                 n_qbc_learners_=4,
@@ -619,6 +873,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
     ml_methods = []
     for idx, key in enumerate(ml_method_numbers):
         ml_methods.append(type(ML_switcher[key]).__name__)
+    original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for ml_method_number, ml_method in ML_switcher.items():
         print('Evaluating the ' + type(ML_switcher[ml_method_number]).__name__ + ' classifier', 'with',
               AL_switcher[al_method].__name__)
@@ -627,7 +882,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
             os.makedirs(file_path)
         start = time.ctime()
         run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
-                    n_instantiations_=1,
+                    n_instantiations_=1,original_class_ratio_=original_class_ratio,
                     initial_ratio_=0.5, initial_size_=10,
                     ml_method_=ml_method_number, al_method_=al_method,
                     qbc_learners_=[2, 3], n_qbc_learners_=4,
@@ -653,6 +908,7 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
     class_ratios=[0.1,0.5,0.25]
     full_class_ratios = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
     init_ratios = []
+    original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for idx, init_ratio in enumerate(class_ratios):
         init_ratios.append('Initial class ratio ' + str(init_ratio))
         print('Evaluating initial class ratio of', str(init_ratio), 'with', type(ML_switcher[ml_method]).__name__,
@@ -662,7 +918,7 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
-                    n_instantiations_=1,
+                    n_instantiations_=1, original_class_ratio_=original_class_ratio,
                     initial_ratio_=init_ratio, initial_size_=10,
                     ml_method_=ml_method, al_method_=al_method,
                     qbc_learners_=[2, 3], n_qbc_learners_=4,
@@ -764,9 +1020,12 @@ if __name__ == "__main__":
     # This is done based on the dataset name 'cylinder-bands',
     # amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
     # ozone-level-8hr:2534, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
-    #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-    # 'kr-vs-kp', 'Bioresponse','spambase', 'wilt', 'churn', 'mushroom', 'PhishingWebsites']
-    dataset_list = ['churn']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
+    #'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+     #'kr-vs-kp', 'Bioresponse','spambase', 'wilt',
+    # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+    #      'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn',
+    dataset_list = ['mushroom', 'PhishingWebsites']
+    #dataset_list = ['churn']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
     # agg_measure_results = read_aggregate_results('../Results/Initial_Class_Ratio/', 100)
     # plot_aggregate_results('Initial_Class_Ratio', agg_measure_results)
     # plot_aggregate_comparison('Initial_Class_Ratio', agg_measure_results)
@@ -778,6 +1037,28 @@ if __name__ == "__main__":
     #agg_measure_results = read_aggregate_results('../Results/AL_Methods/', 100)
     #plot_aggregate_results('AL_Methods', agg_measure_results)
     #plot_aggregate_comparison('AL_Methods', agg_measure_results)
+    #for idx, dataset_name in enumerate(dataset_list):
+    #    dataset = openml.datasets.get_dataset(dataset_name)
+    #    all_dataset_results = read_dataset_results('../Results/Class_Imbalance/', 100, dataset.name)
+
+
+
+    #for idx, dataset_name in enumerate(dataset_list):
+    #    dataset = openml.datasets.get_dataset(dataset_name)
+    #    X_df, y_df, X, y, number_majority, number_minority = preprocess_openML_dataset(dataset)
+    #    label_ratio_df = pd.DataFrame(columns=range(100))
+
+    #    class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
+    #    dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
+    #    for al_method_number, al_method in AL_switcher.items():
+    #        label_ratio_df = dataset_performance_measure_results('../Results/AL_Methods/' + al_method.__name__ + '/Label Ratio/', label_ratio_df, dataset.name)
+    #        al_str = al_method.__name__ + ' initial size ' + str(
+    #            10) + ' initial ratio ' + str(
+    #            0.5)
+    #        ml_str = type(ML_switcher[2]).__name__
+    #        string = dataset_str + ' ' + al_str + ' ' + ml_str + ' for ' + str(100) + ' queries'
+    #        plot_class_per_sample(labels_=label_ratio_df, original_class_ratio_=class_ratio, name_=string, save_=True,
+    #                              file_path_='../Figures/AL_Methods/'+dataset.name + '/' + al_method.__name__ + '/', dataset_name_=dataset.name)
 
     print('Done')
 # Test example

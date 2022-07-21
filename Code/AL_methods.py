@@ -12,6 +12,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 import math
 from collections import Counter
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 import numpy as np
 import xgboost
@@ -38,6 +41,14 @@ def ratio_multiplier(y, ratio):
 
 
 # In[4]:
+class LinearRegressionModel(nn.Module):
+    def __init__(self, x_shape):
+        super(LinearRegressionModel, self).__init__()
+        self.linear = torch.nn.Linear(x_shape, 2)
+
+    def forward(self, x):
+        outputs = torch.sigmoid(self.linear(x))
+        return outputs
 
 
 # Setting up a random sampling strategy given a classifier and a candidate pool of instances to be sampled.
@@ -80,6 +91,11 @@ def density_sampling(classifier, X_pool, n_instances: int = 1, **predict_proba_k
 def qbc_sampling(classifier, X_pool):
     return 0, 0
 
+def r_lure(classifier, X_pool):
+    return 0, 0
+
+def r_pure(classifier, X_pool):
+    return 0, 0
 
 # In[7]:
 
@@ -103,5 +119,7 @@ AL_switcher2 = {
     1: random_sampling,
     2: uncertainty_sampling,
     5: hierarchical_sampling,
-    6: quire
+    6: quire,
+    7: r_lure,
+    8: r_pure
 }

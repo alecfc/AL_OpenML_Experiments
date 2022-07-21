@@ -56,7 +56,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
             return
         if measure_name_ == "Label Ratio":
             ax.plot(mean_performance)
-        if prop_performance_ and measure_name_ != "Selected Label Ratio":
+        if prop_performance_ and measure_name_ != "Label Ratio":
             result_dict = ML_results_fully_trained_[ml_method_]
             mean_performance = result_dict[measure_name_] / mean_performance
             lower_quartiles = result_dict[measure_name_] / lower_quartiles
@@ -285,6 +285,22 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
         plt.savefig(string, bbox_inches='tight')
     # plt.show()
 
+def plot_class_per_sample(labels_, original_class_ratio_, save_, name_, file_path_, dataset_name_):
+    fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
+    sn.set_theme()
+    top_selected_labels = labels_.mode().to_numpy()[0]
+    plot_range = range(len(labels_.columns))
+    ax.set_ylim(bottom=-2, top=2, auto=False)
+
+    ax.set_xlabel('Query iteration')
+    ax.set_ylabel('Most Selected Label at Query Iteration')
+    ax.set_title(
+        dataset_name_ + ': Most Selected Labels at Query Iterations Using Pool Class Ratio of ' + str(original_class_ratio_))
+    ax.plot(top_selected_labels, linestyle='None')
+    plt.plot(plot_range, [i for i in top_selected_labels], c='blue', marker='o', linestyle='None')
+    if save_:
+        string = file_path_ + name_ + '.png'
+        plt.savefig(string, bbox_inches='tight')
 
 def plot_top_selected_instances(instances, labels, save_, file_path_, name_):
     all_instances = []
