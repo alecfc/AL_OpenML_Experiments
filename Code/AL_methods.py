@@ -26,14 +26,21 @@ from sklearn.linear_model import LogisticRegression
 from libact.query_strategies import UncertaintySampling
 from libact.query_strategies.multiclass import HierarchicalSampling
 from libact.query_strategies import QUIRE
+from libact.query_strategies import DWUS
+from libact.query_strategies import ActiveLearningByLearning
+from libact.query_strategies import RandomSampling
 # from pip command
 
 def ratio_multiplier(y, ratio):
     target_stats = Counter(y)
-    new_maj_instances = math.ceil(target_stats[1] / ratio)
+    multiplier = (1-ratio)/ratio # 0,3 or 19
+    # try undersampling majority class
+    new_maj_instances = math.ceil(target_stats[1] * multiplier)
+    #new_maj_instances = math.ceil(target_stats[1] / ratio)
     new_min_instances = target_stats[1]
     if new_maj_instances > target_stats[0]:
-        new_min_instances = math.ceil(target_stats[0] * ratio)
+        # try undersampling minority class
+        new_min_instances = math.ceil(target_stats[0] / multiplier)
         new_maj_instances = target_stats[0]
     target_stats[0] = new_maj_instances
     target_stats[1] = new_min_instances
@@ -63,6 +70,9 @@ def hierarchical_sampling(classifier, X_pool):
 
 # In[5]:
 def quire(classifier, X_pool):
+    return 0, 0
+
+def albl(classifier, X_pool):
     return 0, 0
 
 # Setting up a density-weighted sampling method given a classifier and a candidate pool of instances to be sampled.
@@ -118,8 +128,10 @@ AL_switcher = {
 AL_switcher2 = {
     1: random_sampling,
     2: uncertainty_sampling,
+    3: density_sampling,
     5: hierarchical_sampling,
     6: quire,
-    7: r_lure,
-    8: r_pure
+    #7: r_lure,
+    #8: r_pure,
+    9: albl
 }

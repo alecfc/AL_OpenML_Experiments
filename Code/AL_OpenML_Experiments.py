@@ -11,6 +11,7 @@ import time
 import torch
 import torch.optim as optim
 import joblib
+
 sys.modules['sklearn.externals.joblib'] = joblib
 import torch.utils.data as data_utils
 from timeit import default_timer as timer
@@ -37,6 +38,7 @@ from AL_methods import *
 from AL_plot_results import *
 from AL_dataloader import *
 from AL_utils import *
+
 warnings.filterwarnings(
     'ignore')  # precision often has cases where there are no predictions for the minority class, which leads to zero-division. This keeps that warning from showing up.
 
@@ -141,7 +143,7 @@ EXECUTIONS = 10  # number of executions of k-fold validation
 # Number of queries per round of learning. The main testing loops in run_test could be adapted to not be static. E.g. until convergence, or some other stopping criterion. 
 # However, for evaluation it is easier if all methods are tested with the same number of queries (requirement of Area Under the Learning Curve measure (ALC)).
 # Performance is evaluated after each instance is queried and added to the training pool.
-N_QUERIES = 45
+N_QUERIES = 100
 
 # size of initialization set. Needs to be at least the # classes, but more if QBC used.
 INITIALIZATION_SET = 10
@@ -228,8 +230,8 @@ def set_settings(k_, execs_, n_queries_, n_init_, train_sum_, sep_class_, ml_met
 
 
 def determine_initial_set(x, y, prob_ratio, size_initial):
-    number_class_0 = int(round(prob_ratio * size_initial))
-    number_class_1 = int(size_initial - number_class_0)
+    number_class_1 = int(round(prob_ratio * size_initial))
+    number_class_0 = int(size_initial - number_class_1)
     count_0 = 0
     count_1 = 0
     x_initial = []
@@ -260,12 +262,12 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
 # x, y = determine_initial_set(x, y, 0.2, 6)
 
 def train(
-    model,
-    train_loader,
-    optimizer,
-    weighting_scheme,
-    _run=None,
-    for_acquisition=False
+        model,
+        train_loader,
+        optimizer,
+        weighting_scheme,
+        _run=None,
+        for_acquisition=False
 ):
     """
     Helper function to execute a single epoch of training.
@@ -284,7 +286,6 @@ def train(
 
         prediction = model(data_N_C_H_W)  # Always uses 1 when not doing consistent.
 
-
         loss = (weight * raw_loss(prediction, target)).mean(0)
 
         loss.backward()
@@ -295,169 +296,17 @@ def train(
         # print(f'Epoch: {epoch}:')
     # print(f'Train Set: Average Loss: {avg_train_loss:.6f}')
 
-def evaluate(model, eval_loader):
-    """We actually only want eval mode on when we're doing acquisition because of how consistent dropout works.
-    """
-    model_arch = None
-    n_samples = 8
-    weighting_scheme = 'refined'
-    model.train()
 
-    nll = 0
-    weighted_nll = 0
-    correct = 0
-
-    with torch.no_grad():
-        for data_N_C_H_W, target_N, weight_N in eval_loader:
-            data_N_C_H_W = data_N_C_H_W.cuda()
-            target_N = target_N.cuda()
-            weight_N = weight_N.cuda()
-
-            samples_V_N = torch.stack(
-                [model(data_N_C_H_W) for _ in range(n_samples)]
-            )
-            prediction_N = torch.logsumexp(samples_V_N, dim=0) - math.log(n_samples)
-
-            raw_nll_N = F.nll_loss(prediction_N, target_N, reduction="none")
-            nll += torch.sum(raw_nll_N)
-            if weighting_scheme == "none":
-                weighted_nll = 0.
-            else:
-                weighted_nll += torch.sum(weight_N * raw_nll_N)
-
-            # get the index of the max log-probability
-            class_prediction = prediction_N.max(1, keepdim=True)[1]
-            correct += (
-                class_prediction.eq(target_N.view_as(class_prediction)).sum().item()
-            )
-
-    nll /= len(eval_loader.dataset)
-    if weighting_scheme == "none":
-        pass
-    else:
-        weighted_nll /= len(eval_loader.dataset)
-        weighted_nll = weighted_nll.item()
-    percentage_correct = 100.0 * correct / len(eval_loader.dataset)
-
-    return nll.item(), weighted_nll, percentage_correct
-
-def train_to_convergence(
-    model,
-    train_loader,
-    validation_loader,
-    for_acquisition,
-):
-    """
-    Helper function to train multiple epochs until the set limit is reached or we lose patience.
-    """
-    print(f"Beginning training with {len(train_loader.dataset)} training points and {len(validation_loader.dataset)} validation.")
-    best = np.inf
-    best_model = model
-    patience = 0
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=0.0001,
-        weight_decay=0.0001,
-    )
-    print(f"Digits used: {len(train_loader.dataset)}")
-    for epoch in range(100):
-        train(
-            model,
-            train_loader,
-            optimizer,
-            'refined',
-            _run=None,
-            for_acquisition=for_acquisition
-        )
-        valid_nll, _, valid_accuracy = evaluate(
-            model,
-            validation_loader
-        )
-        # _run.log_scalar("evaluation_loss", valid_loss)
-        # _run.log_scalar("evaluation_accuracy", valid_accuracy)
-        print(
-            f"Epoch {epoch:0>3d} eval: Val nll: {valid_nll:.4f}, Val Accuracy: {valid_accuracy}"
-        )
-
-        if valid_nll < best:
-            best = valid_nll
-            best_model = deepcopy(model)
-            patience = 0
-        else:
-            patience += 1
-
-        if patience >= 20:
-            print(f"Patience reached - stopping training. Best was {best}")
-            break
-    print("Completed training", end="")
-
-    print(".")
-    return best_model
-
-
-# In[23]:
-
-def run_AL_test_plain_levelled(X, y, X_df, k_, execs_, n_queries_, initial_ratio_, initial_size_, save_results_, file_path_):
-    accuracy_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    macro_f1_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    recall_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    precision_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    auc_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    loss_results = pd.DataFrame(columns=range(n_queries_ + 1))
-    selected_labels_table = pd.DataFrame(columns=range(n_queries_))
-    selected_instances_table = pd.DataFrame(columns=range(n_queries_))
-    skf = StratifiedKFold(n_splits=K, shuffle=True)
-    overall_weighted_risks = []
-    overall_unweighted_risks = []
-    overall_rb_risks = []
-    overall_true_risks = []
-    overall_refined_rb_risks = []
-    overall_uniform_risks = []
-    train_set_indices = np.array(list(skf.split(X, y)))
-
-    for execs in range(execs_):
-        weighted_risk = []
-        # K-fold cross validation
-        for i in range(k_):
-            # sys.stdout.write("Validating on fold: ", i + 1, "/", K, end="\r")
-            print('\r', "Validating on fold: ", i + 1, "/", k_)
-            sys.stdout.flush()
-            X_train = X[train_set_indices[i][0]]
-            y_train = y[train_set_indices[i][0]]
-
-            X_test = X[train_set_indices[i][1]]
-            y_test = y[train_set_indices[i][1]]
-            dataset = OpenMLDataset(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test)
-            temp_tensor = torch.from_numpy(X_train)
-            model = ML_switcher.get(1)
-            dataset.set_model(model)
-            temp = np.expand_dims(dataset.pool_dataset[1], axis=1)
-            model.fit(dataset.pool_dataset[1], dataset.pool_dataset[0])
-
-
-            for idx in range(n_queries_):
-
-                sampled_idx, probability_distribution = dataset.proposal_epsilon_greedy()
-                dataset.acquire_point(sampled_idx, probability_distribution)
-                # Estimate the risk of the fixed model using those points.
-                if idx > 0:
-                    weighted_risk.append(dataset.estimate_risk(weighting_scheme="refined"))
-                #if (idx % 20 == 1) and execs == 1:
-                #    dataset.plot_weights()
-            overall_weighted_risks.append(weighted_risk)
-
-    true_risk = dataset.true_risk()
-    plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks,
-              overall_uniform_risks, true_risk, execs_)
-
-def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks, overall_uniform_risks, true_risk, n_runs):
+def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks,
+              overall_uniform_risks, true_risk, n_runs):
     c = sns.color_palette()
+
     def series(risks):
         overall_risks_array = np.array(risks)
         risk_mean = np.mean(overall_risks_array, axis=0)
         if overall_risks_array.shape[0] != 1:
             risk_std = np.std(overall_risks_array, axis=0)
-            risk_se = risk_std / np.sqrt(overall_risks_array.shape[0] -1)
+            risk_se = risk_std / np.sqrt(overall_risks_array.shape[0] - 1)
         else:
             risk_se = 0
         x = np.arange(len(risk_mean))
@@ -490,8 +339,10 @@ def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks
     plt.legend()
     plt.savefig(f"plots/toy_fn_comparison_{n_runs}.pdf", bbox_inches="tight", dpi=300)
 
-#@jit
-def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_class_ratio_, initial_ratio_, initial_size_, ml_method_,
+
+# @jit
+def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_class_ratio_, initial_ratio_,
+                initial_size_, ml_method_,
                 al_method_, qbc_learners_, n_qbc_learners_, save_results_, normalize_data_, prop_performance_,
                 file_path_, ML_results_fully_trained_, exp_subtype_, al_dict_=AL_switcher):
     # Keep track of results for each query. Used later to calculate incremental performance. +1 because the first value is the performance directly after initialization
@@ -524,8 +375,8 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
         train_set_indices = np.array(list(skf.split(temp_X, temp_y)))
         # K-fold cross validation
         for i in range(k_):
-            #sys.stdout.write("Validating on fold: ", i + 1, "/", K, end="\r")
-            print('\r',"Validating on fold: ", i + 1, "/", k_)
+            # sys.stdout.write("Validating on fold: ", i + 1, "/", K, end="\r")
+            print('\r', "Validating on fold: ", i + 1, "/", k_)
             sys.stdout.flush()
             X_train = X[train_set_indices[i][0]]
             y_train = y[train_set_indices[i][0]]
@@ -538,11 +389,16 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
                 # X_train_copy = X_train.copy()
                 # y_train_copy = y_train.copy()
                 predictions = []
-                x_initial, y_initial, X_temp, y_train, y_list = determine_initial_set(X_train, y_train,
-                                                                                       initial_ratio_,
-                                                                                       initial_size_)
-                if al_method_ == 5 or al_method_ == 6:
+
+                if al_method_ == 5 or al_method_ == 6 or al_method_ == 9:
+                    x_initial, y_initial, X_temp, y_temp, y_list = determine_initial_set(X_train, y_train,
+                                                                                         initial_ratio_,
+                                                                                         initial_size_)
                     ds = libact.base.dataset.Dataset(X_train, y_list)
+                else:
+                    x_initial, y_initial, X_train, y_train, y_list = determine_initial_set(X_train, y_train,
+                                                                                           initial_ratio_,
+                                                                                           initial_size_)
                 if al_method_ == 4:
                     committee_list = []
                     for qbc_model in qbc_learners_:  # qbc_learners
@@ -561,12 +417,12 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
                     )
                     prediction = learner.predict(X_test)
                 elif al_method_ == 5:
-                    model = libact.models.LogisticRegression(C=0.1)
+                    model = libact.models.LogisticRegression()
                     sub_qs = UncertaintySampling(
-                        dataset=ds, method='sm', model=libact.models.LogisticRegression(C=0.1))
+                        dataset=ds, method='lc', model=libact.models.LogisticRegression())
                     learner = HierarchicalSampling(
-                        dataset=ds, # Dataset object
-                        classes=[0,1],
+                        dataset=ds,  # Dataset object
+                        classes=[0, 1],
                         active_selecting=True,
                         subsample_qs=sub_qs
                     )
@@ -574,23 +430,43 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
                     # Make first set of predictions (before querying)
                     prediction = model.predict(X_test)
                 elif al_method_ == 6:
-                    model = libact.models.LogisticRegression(C=0.1)
+                    model = libact.models.LogisticRegression()
                     learner = QUIRE(
-                        dataset=ds # Dataset object
+                        dataset=ds,  # Dataset object
+                        kernel='rbf'
                     )
                     model.train(ds)
                     # Make first set of predictions (before querying)
                     prediction = model.predict(X_test)
                 elif al_method_ == 7:
-                    weighted_dataset = OpenMLDataset(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, X_initial=x_initial, y_initial=y_initial)
+                    weighted_dataset = OpenMLDataset(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test,
+                                                     X_initial=x_initial, y_initial=y_initial)
                     weighted_dataset.set_model(model)
                     model.fit(weighted_dataset.acquired_dataset[1], weighted_dataset.acquired_dataset[0])
+                    prediction = model.predict(X_test)
+                elif al_method_ == 9:
+                    model = libact.models.LogisticRegression()
+                    quota = 100
+                    learner = ActiveLearningByLearning(
+                        dataset=ds,
+                        T=quota,  # qs.make_query can be called for at most 100 times
+                        query_strategies=[
+                            RandomSampling(ds, T=quota, model=model),
+                            UncertaintySampling(ds, T=quota, model=model, method='lc'),
+                            UncertaintySampling(ds, T=quota, model=model, method='sm'),
+                            UncertaintySampling(ds, T=quota, model=model, method='entropy'),
+                            DWUS(ds, T=quota, model=model),
+                            DWUS(ds, T=quota, model=model, n_clusters=10)
+                        ],
+                        uniform_sampler=False,
+                        model=model
+                    )
+                    model.train(ds)
+                    # Make first set of predictions (before querying)
                     prediction = model.predict(X_test)
                 else:
                     # print(x_initial)
                     # print(y_initial)
-                    x_initial, y_initial, X_train, y_train, y_list = determine_initial_set(X_train, y_train, initial_ratio_,
-                                                                                   initial_size_)
                     learner = ActiveLearner(
                         estimator=deepcopy(model),
                         query_strategy=AL_switcher.get(al_method_),
@@ -621,15 +497,16 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
                 loss_history = [unqueried_loss_single]
 
                 for idx in range(n_queries_):
-                    if al_method_ == 5 or al_method_ == 6:
+                    if al_method_ == 5 or al_method_ == 6 or al_method_ == 9:
                         query_idx = learner.make_query()
                         ds.update(query_idx, y_train[query_idx])
                         model.train(ds)
                         predictions = model.predict(X_test)
-                    elif al_method_ == 7:
-                        query_idx, probability_distribution = weighted_dataset.proposal_epsilon_greedy()
+                    elif al_method_ == 7 or al_method_ == 8:
+                        query_idx, probability_distribution = weighted_dataset.proposal_distribution_uniform()
                         weighted_dataset.acquire_point(query_idx, probability_distribution)
-                        model.fit(weighted_dataset.acquired_dataset[1], weighted_dataset.acquired_dataset[0])
+                        model.fit(weighted_dataset.acquired_dataset[1], weighted_dataset.acquired_dataset[0],
+                                  sample_weight=weighted_dataset.refined_weighting_scheme())
                         query_idx = query_idx[0].max()
                         weighted_risk.append(weighted_dataset.estimate_risk(weighting_scheme="refined"))
                         predictions = model.predict(X_test)
@@ -729,11 +606,15 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
 
 
 def dataset_performance_measure_results(filepath_, df_measure_results_, dataset_name_):
+    file_found = False
     for exp_folder in os.scandir(filepath_):
         df_result = pd.read_pickle(exp_folder)
         if dataset_name_ in exp_folder.name:
             df_measure_results_ = df_measure_results_.append(df_result, ignore_index=True)
-    return df_measure_results_
+            if not file_found:
+                file_name = ' '.join(exp_folder.name.split(' ')[3:])
+                file_found = True
+    return df_measure_results_, file_name
 
 
 def aggregate_performance_measure_results(filepath_, agg_measure_results_):
@@ -743,7 +624,43 @@ def aggregate_performance_measure_results(filepath_, agg_measure_results_):
     return agg_measure_results_
 
 
-def read_dataset_results(base_filepath_, n_queries_, dataset_name_):
+def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_):
+    for idx, dataset_name in enumerate(dataset_list):
+        dataset = openml.datasets.get_dataset(dataset_name)
+        if not os.path.exists('../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/'):
+            os.makedirs('../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/')
+        X_df, y_df, X, y, number_majority, number_minority = preprocess_openML_dataset(dataset)
+        if measure_ == 'Label Ratio':
+            df = pd.DataFrame(columns=range(n_queries_))
+        else:
+            df = pd.DataFrame(columns=range(n_queries_ + 1))
+
+        class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
+        dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
+        df, file_name = dataset_performance_measure_results(
+            '../Results/' + exp_type_ + '/' + exp_sub_type_ + '/' + measure_ + '/', df, dataset.name)
+        file_name = file_name.replace('.pkl','')
+        if measure_ == 'Label Ratio' or measure_ == 'Loss Difference':
+            al_method_name = (str(file_name.split(' ')[4]))
+            ml_method_name = (str(file_name.split(' ')[11]))
+        else:
+            al_method_name = (str(file_name.split(' ')[3]))
+            ml_method_name = (str(file_name.split(' ')[10]))
+            file_name = dataset_name + ' ' + file_name
+        al_method = [k for k, v in AL_switcher.items() if v.__name__ == al_method_name][0]
+        ml_method = [k for k, v in ML_switcher.items() if type(v).__name__ == ml_method_name][0]
+        if measure_ == 'Label Ratio':
+            plot_class_per_sample(labels_=df, original_class_ratio_=class_ratio, name_=file_name, save_=True,
+                                  file_path_='../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/',
+                                  dataset_name_=dataset.name)
+        plot_results(X, df, measure_, ML_results_fully_trained, measure_ + ' of ' + file_name, al_method,
+                     ml_method, True, False, False,
+                     '../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/',
+                     data_title_=dataset.name, al_dict_=AL_switcher)
+    return al_method, ml_method
+
+
+def read_dataset_results(base_filepath_, n_queries_, dataset_name_, data_size=500):
     performance_metrics = {'Accuracy': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'F1': pd.DataFrame(columns=range(n_queries_ + 1)),
                            'Recall': pd.DataFrame(columns=range(n_queries_ + 1)),
@@ -753,9 +670,11 @@ def read_dataset_results(base_filepath_, n_queries_, dataset_name_):
                            "Loss Difference": pd.DataFrame(columns=range(n_queries_ + 1))}
     df_results = {}
     for exp_folder in os.scandir(base_filepath_):
+        if data_size > 5000 and exp_folder.name == 'quire':
+            continue
         df_results[exp_folder.name] = performance_metrics.copy()
         for exp_type_result in os.scandir(exp_folder):
-            df_results[exp_folder.name][exp_type_result.name] = dataset_performance_measure_results(
+            df_results[exp_folder.name][exp_type_result.name], file_name = dataset_performance_measure_results(
                 exp_type_result.path, df_results[exp_folder.name][exp_type_result.name], dataset_name_)
     return df_results
 
@@ -778,17 +697,20 @@ def read_aggregate_results(base_filepath_, n_queries_):
 
 
 def compare_results_single_dataset(all_dataset_results_, file_path_, measure_name_, experiment_type_, setting_names_,
-                                   dataset_name_):
+                                   dataset_name_, initial_labels_, original_class_ratio_):
     measure_results = []
     for subset, subset_results in all_dataset_results_.items():
         measure_results.append(all_dataset_results_[subset][measure_name_])
+
+    if measure_name_ == 'Label Ratio':
+        plot_multiple_bias(initial_labels_, measure_results, original_class_ratio_, True, file_path_, setting_names_, experiment_type_, dataset_name_)
     plot_3d_results(measure_results, measure_name_, save_=True,
                     file_path_=file_path_,
                     z_labels_=setting_names_,
                     experiment_type_=experiment_type_, dataset_name_=dataset_name_)
     plot_multiple(measure_results, measure_name_, setting_names_=setting_names_,
                   experiment_type_=experiment_type_,
-                  save_=True, file_path_=file_path_, dataset_name_=dataset.name)
+                  save_=True, file_path_=file_path_, dataset_name_=dataset_name_)
     plot_multiple(measure_results, measure_name_, setting_names_=setting_names_, experiment_type_=experiment_type_,
                   save_=True, file_path_=file_path_, dataset_name_=dataset_name_)
 
@@ -821,18 +743,17 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/Class_Imbalance/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='Class Imbalance',
-                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name)
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
+                                       initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
 
 
-def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
+def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained, al_dict):
     # Iterate through all active learning methods
-    #active_learning_methods = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling',
+    # active_learning_methods = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling',
     #                           'hierarchical_sampling', 'quire']
     active_learning_methods = []
-    al_dict = AL_switcher2
     original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for al_method_number, al_method in al_dict.items():
-        al_method_number = 6
         active_learning_methods.append(al_method.__name__)
         print('Evaluating', al_method.__name__, 'using the', type(ML_switcher[ml_method]).__name__, 'classifier')
         file_path = "../Figures/AL_Methods/" + dataset.name + '/' + al_method.__name__ + '/'
@@ -841,35 +762,39 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained):
         if al_method_number == 4 or al_method_number == 6:
             execs = 5
         else:
-            execs = 1
+            execs = 20
+        if X.shape[0] > 5000 and al_method_number == 6:
+            continue
         start = time.ctime()
         run_AL_test(X, y, X_df, k_=5, execs_=execs, n_queries_=100,
-                                n_instantiations_=1,original_class_ratio_=original_class_ratio,
-                                initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
-                                al_method_=al_method_number, qbc_learners_=[2, 3],
-                                n_qbc_learners_=4,
-                                save_results_=True, normalize_data_=False,
-                                prop_performance_=False,
-                                file_path_=file_path,
-                                ML_results_fully_trained_=ML_results_fully_trained,
-                                exp_subtype_=al_method.__name__, al_dict_=al_dict)
+                    n_instantiations_=1, original_class_ratio_=original_class_ratio,
+                    initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
+                    al_method_=al_method_number, qbc_learners_=[2, 3],
+                    n_qbc_learners_=4,
+                    save_results_=True, normalize_data_=False,
+                    prop_performance_=False,
+                    file_path_=file_path,
+                    ML_results_fully_trained_=ML_results_fully_trained,
+                    exp_subtype_=al_method.__name__, al_dict_=al_dict)
         end = time.ctime()
         print('started', start)
         print('finished', end)
-    all_dataset_results = read_dataset_results('../Results/AL_Methods/', 100, dataset.name)
+    all_dataset_results = read_dataset_results('../Results/AL_Methods/', 100, dataset.name, X.shape[0])
 
     for measure_name, measure_results in all_dataset_results[active_learning_methods[0]].items():
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/AL_Methods/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='AL Methods',
-                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name)
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
+                                       initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
+
 
 # In[26]:
 
 
 def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
     # Perform the active learning querying cycle for all different machine learning classifiers on a single dataset
-    ml_method_numbers = [1,2,3]
+    ml_method_numbers = [1, 2, 3]
     ml_methods = []
     for idx, key in enumerate(ml_method_numbers):
         ml_methods.append(type(ML_switcher[key]).__name__)
@@ -882,7 +807,7 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
             os.makedirs(file_path)
         start = time.ctime()
         run_AL_test(X, y, X_df, k_=5, execs_=20, n_queries_=100,
-                    n_instantiations_=1,original_class_ratio_=original_class_ratio,
+                    n_instantiations_=1, original_class_ratio_=original_class_ratio,
                     initial_ratio_=0.5, initial_size_=10,
                     ml_method_=ml_method_number, al_method_=al_method,
                     qbc_learners_=[2, 3], n_qbc_learners_=4,
@@ -899,13 +824,15 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/ML_Methods/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='ML Methods',
-                                       setting_names_=ml_methods, dataset_name_=dataset.name)
+                                       setting_names_=ml_methods, dataset_name_=dataset.name,
+                                       initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
+
 
 def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_trained):
     # Iterate through all active learning methods
     auc_list = []
     ratio_list = []
-    class_ratios=[0.1,0.5,0.25]
+    class_ratios = [0.1, 0.5, 0.25]
     full_class_ratios = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
     init_ratios = []
     original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
@@ -933,7 +860,8 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/Initial_Class_Ratio/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='Initial Class Ratio',
-                                       setting_names_=full_class_ratios, dataset_name_=dataset.name)
+                                       setting_names_=full_class_ratios, dataset_name_=dataset.name,
+                                       initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
 
 
 # In[27]:
@@ -959,7 +887,7 @@ def preprocess_openML_dataset(dataset):
 # In[28]:
 
 def create_openML_subsamples(X, y):
-    rus = RandomUnderSampler(random_state=42, sampling_strategy=ratio_multiplier(y=y, ratio=1))
+    rus = RandomUnderSampler(random_state=42, sampling_strategy=ratio_multiplier(y=y, ratio=0.5))
     X_balanced, y_balanced = rus.fit_resample(X, y)
     rus = RandomUnderSampler(random_state=42, sampling_strategy=ratio_multiplier(y=y, ratio=0.25))
     X_minor_imb, y_minor_imb = rus.fit_resample(X, y)
@@ -982,8 +910,9 @@ def create_openML_subsamples(X, y):
 def run_openML_test(experiment_):
     performance_results = []
     n_queries = 100
-    ml_method = 1
-    al_method = 3
+    ml_method = 2
+    al_method = 2
+    al_dict = AL_switcher
     global dataset
     global EXP_TYPE
     EXP_TYPE = experiment_
@@ -992,6 +921,7 @@ def run_openML_test(experiment_):
         dataset = openml.datasets.get_dataset(dataset_name)
         print('Running experiments on', dataset.name)
         X_df, y_df, X, y, number_majority, number_minority = preprocess_openML_dataset(dataset)
+        print('Class Ratio:', round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3))
         X_list, y_list = create_openML_subsamples(X, y)
         X_train, X_test, y_train, y_test, ML_results_fully_trained, ML_results_subsample_trained, ML_results_subsample_trained_biased = evaluate_all_models(
             X, y, X_list, y_list)
@@ -1001,64 +931,73 @@ def run_openML_test(experiment_):
                                   ML_results_fully_trained)
         elif experiment_ == 'AL_Methods':
             al_run_single_dataset(X, y, ml_method, X_df,
-                                  ML_results_fully_trained)
+                                  ML_results_fully_trained, al_dict)
         elif experiment_ == 'ML_Methods':
             ml_run_single_dataset(X, y, al_method, X_df,
                                   ML_results_fully_trained)
         if experiment_ == 'Initial_Class_Ratio':
             init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_trained)
 
-    agg_measure_results = read_aggregate_results('../Results/'+experiment_+'/', n_queries)
-    plot_aggregate_results(experiment_, agg_measure_results)
+    agg_measure_results = read_aggregate_results('../Results/' + experiment_ + '/', n_queries)
+    plot_aggregate_results(experiment_, agg_measure_results, al_method, ml_method, al_dict)
     plot_aggregate_comparison(experiment_, agg_measure_results)
 
     # for
     #    plot_aggregate_graphs()
 
 
+def plot_all(exp_type_, subsets_):
+    exp_name = exp_type_.replace('_',' ')
+    for measure in ['Accuracy', 'F1', 'Recall', 'Precision', "Label Ratio", "AUC", 'Loss Difference']:
+        for subset in subsets_:
+            al_method, ml_method = read_and_replot_measure(exp_type_=exp_type_, exp_sub_type_=subset, measure_=measure, n_queries_=100)
+    for idx, dataset_name in enumerate(dataset_list):
+        dataset = openml.datasets.get_dataset(dataset_name)
+        all_dataset_results = read_dataset_results('../Results/'+ exp_type_ + '/', 100, dataset.name)
+        X_df, y_df, X, y, number_majority, number_minority = preprocess_openML_dataset(dataset)
+        original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
+        for measure_name, measure_results in all_dataset_results[subsets_[0]].items():
+            compare_results_single_dataset(all_dataset_results_=all_dataset_results,
+                                           file_path_='../Figures/'+ exp_type_ + '/' + dataset.name + '/',
+                                           measure_name_=measure_name, experiment_type_=exp_name,
+                                           setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
+                                           initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
+
+    agg_measure_results = read_aggregate_results('../Results/'+ exp_type_ + '/', 100)
+    plot_aggregate_results(exp_type_, agg_measure_results, al_method, ml_method, AL_switcher)
+    plot_aggregate_comparison(exp_type_, agg_measure_results)
+
 if __name__ == "__main__":
     # This is done based on the dataset name 'cylinder-bands',
     # amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
     # ozone-level-8hr:2534, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
-    #'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-     #'kr-vs-kp', 'Bioresponse','spambase', 'wilt',
     # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-    #      'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn',
-    dataset_list = ['mushroom', 'PhishingWebsites']
-    #dataset_list = ['churn']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
-    # agg_measure_results = read_aggregate_results('../Results/Initial_Class_Ratio/', 100)
-    # plot_aggregate_results('Initial_Class_Ratio', agg_measure_results)
-    # plot_aggregate_comparison('Initial_Class_Ratio', agg_measure_results)
-
-    #run_openML_test(experiment_='Class_Imbalance')
-    run_openML_test(experiment_='AL_Methods')
-    #run_openML_test(experiment_='ML_Methods')
-    #run_openML_test(experiment_='Initial_Class_Ratio')
+    # 'kr-vs-kp', 'Bioresponse','spambase', 'wilt',
+    # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+    #      'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn', 'mushroom',
+    # dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+    #      'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn', 'mushroom','PhishingWebsites']
+    dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+          'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn', 'mushroom','PhishingWebsites']  # ,'ringnorm', 'mushroom']#, 'electricity', 'creditcard']
+    # To plot aggregate results
     #agg_measure_results = read_aggregate_results('../Results/AL_Methods/', 100)
-    #plot_aggregate_results('AL_Methods', agg_measure_results)
+    #plot_aggregate_results('AL_Methods', agg_measure_results, 2, 1, AL_switcher)
     #plot_aggregate_comparison('AL_Methods', agg_measure_results)
-    #for idx, dataset_name in enumerate(dataset_list):
-    #    dataset = openml.datasets.get_dataset(dataset_name)
-    #    all_dataset_results = read_dataset_results('../Results/Class_Imbalance/', 100, dataset.name)
 
+    # Main experiments
+    #run_openML_test(experiment_='Class_Imbalance')
+    #run_openML_test(experiment_='AL_Methods')
+    run_openML_test(experiment_='ML_Methods')
+    run_openML_test(experiment_='Initial_Class_Ratio')
 
+    # Replot single
+    subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
+    subsets_ci = ['75-25', '95-5', 'Balanced', 'Original']
+    subsets_ml = ['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier']
+    subsets_init = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
 
-    #for idx, dataset_name in enumerate(dataset_list):
-    #    dataset = openml.datasets.get_dataset(dataset_name)
-    #    X_df, y_df, X, y, number_majority, number_minority = preprocess_openML_dataset(dataset)
-    #    label_ratio_df = pd.DataFrame(columns=range(100))
-
-    #    class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
-    #    dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
-    #    for al_method_number, al_method in AL_switcher.items():
-    #        label_ratio_df = dataset_performance_measure_results('../Results/AL_Methods/' + al_method.__name__ + '/Label Ratio/', label_ratio_df, dataset.name)
-    #        al_str = al_method.__name__ + ' initial size ' + str(
-    #            10) + ' initial ratio ' + str(
-    #            0.5)
-    #        ml_str = type(ML_switcher[2]).__name__
-    #        string = dataset_str + ' ' + al_str + ' ' + ml_str + ' for ' + str(100) + ' queries'
-    #        plot_class_per_sample(labels_=label_ratio_df, original_class_ratio_=class_ratio, name_=string, save_=True,
-    #                              file_path_='../Figures/AL_Methods/'+dataset.name + '/' + al_method.__name__ + '/', dataset_name_=dataset.name)
+    subsets_al2 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'hierarchical_sampling', 'quire', 'albl']
+    #plot_all(exp_type_='ML_Methods', subsets_=subsets_ml)
 
     print('Done')
 # Test example

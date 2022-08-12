@@ -19,7 +19,12 @@ from AL_methods import *
 
 
 # from pip command
-
+def init_set_generator(prob_ratio, size_initial):
+    number_class_1 = int(round(prob_ratio * size_initial))
+    number_class_0 = int(size_initial - number_class_1)
+    list_zeroes = np.zeros((number_class_0,), dtype=int)
+    list_ones = np.ones((number_class_1,), dtype=int)
+    return list(list_zeroes) + list(list_ones)
 
 # Method for plotting the saved results as figures.
 def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, al_method_, ml_method_, save_=False,
@@ -217,10 +222,10 @@ def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save
             plt.plot(plot_range, [i for (i, j) in quartiles], '_', markersize=6, c=colors[idx])
             plt.plot(plot_range, [j for (i, j) in quartiles], '_', markersize=6, c=colors[idx])
 
-    if metric_name_ != "Label Ratio":
-        ax.legend(loc='lower right')
-    else:
+    if metric_name_ == "Label Ratio" or metric_name_ == "Loss Difference":
         ax.legend(loc='upper right')
+    else:
+        ax.legend(loc='lower right')
     if save_:
         string = file_path_ + title + '.png'
         plt.savefig(string, bbox_inches='tight')
@@ -258,7 +263,40 @@ def plot_risk_difference(results_, loss_fully_trained_, model_name_, save_, file
 
 
 # In[18]:
-
+def plot_multiple_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_, setting_names_, experiment_type_, dataset_name_):
+    fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
+    sn.set_theme()
+    colors = ['#B42B2D', '#0E84FA', '#FAAB0E', '#121110', '#249338', '#894CB6']
+    ax.set_xlabel('Query iteration')
+    ax.set_ylabel('Active learning bias through class ratio difference')
+    title = "Comparison of Bias Through Class Ratio Difference Using Original Ratio of " + str(original_class_ratio_) \
+            + " for the " + experiment_type_ + " experiment on " + dataset_name_
+    if experiment_type_ == 'Class Imbalance':
+        class_ratios = [0.25, 0.05, 0.5, original_class_ratio_]
+        original_class_ratio_ = class_ratios
+    elif experiment_type_ == 'Initial Class Ratio':
+        init_ratios = [0.1, 0.5, 0.25]
+    ax.set_title(
+        dataset_name_ + ': Comparison of Bias Through Class Ratio Difference Using Original Ratio of ' + str(original_class_ratio_))
+    for idx, label in enumerate(labels_):
+        top_selected_labels = label.mode()
+        plot_range = range(len(label.columns))
+        ratio_differences = []
+        if experiment_type_ == 'Initial Class Ratio':
+            initial_labels_ = init_set_generator(init_ratios[idx],10)
+        current_labels = initial_labels_
+        if experiment_type_ == 'Class Imbalance':
+            original_class_ratio_ = class_ratios[idx]
+        for i in top_selected_labels.to_numpy()[0]:
+            current_labels = np.append(current_labels, [i])
+            updated_class_ratio = round(
+                Counter(current_labels)[1] / (Counter(current_labels)[0] + Counter(current_labels)[1]), 2)
+            ratio_differences.append(original_class_ratio_ - updated_class_ratio)
+        plt.plot(plot_range, [i for i in ratio_differences], c=colors[idx], label=setting_names_[idx])
+    plt.legend(loc="lower right")
+    if save_:
+        string = file_path_ + title + '.png'
+        plt.savefig(string, bbox_inches='tight')
 
 def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_, name_, dataset_name_):
     # Plot our bias difference over time, through calculating the difference between class ratio's
@@ -286,18 +324,20 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
     # plt.show()
 
 def plot_class_per_sample(labels_, original_class_ratio_, save_, name_, file_path_, dataset_name_):
-    fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
     sn.set_theme()
+    proportion_per_query = []
+    num_zeroes = []
+    num_ones =[]
+    total_per_exec = len(labels_[0])
     top_selected_labels = labels_.mode().to_numpy()[0]
-    plot_range = range(len(labels_.columns))
-    ax.set_ylim(bottom=-2, top=2, auto=False)
-
-    ax.set_xlabel('Query iteration')
-    ax.set_ylabel('Most Selected Label at Query Iteration')
-    ax.set_title(
-        dataset_name_ + ': Most Selected Labels at Query Iterations Using Pool Class Ratio of ' + str(original_class_ratio_))
-    ax.plot(top_selected_labels, linestyle='None')
-    plt.plot(plot_range, [i for i in top_selected_labels], c='blue', marker='o', linestyle='None')
+    for (columnName, columnData) in labels_.iteritems():
+        num_zeroes.append(columnData.loc[columnData < 1].count()/total_per_exec)
+        num_ones.append(columnData.loc[columnData == 1].count()/total_per_exec)
+    df = pd.DataFrame(list(zip(num_zeroes, num_ones)), index=range(1,len(labels_.T[0])+1), columns=['Negative Class', 'Positive Class'], )
+    (df*100).plot.bar(title=dataset_name_ + ': Proportion of Selected Classes per Query', stacked=True, figsize=(18, 6))
+    plt.legend(loc='upper right')
+    plt.xlabel('Query Iteration')
+    plt.ylabel('Percentage of Chosen Classes')
     if save_:
         string = file_path_ + name_ + '.png'
         plt.savefig(string, bbox_inches='tight')
@@ -336,18 +376,25 @@ def plot_top_selected_instances(instances, labels, save_, file_path_, name_):
 # In[20]:
 
 
-def plot_aggregate_results(experiment_name, aggregate_ci_results):
+def plot_aggregate_results(experiment_name, aggregate_results, al_method_, ml_method_, al_switcher_):
     print('Aggregate Results:')
-    for experiment_type, experiment_results in aggregate_ci_results.items():
+    for experiment_type, experiment_results in aggregate_results.items():
         experiment_title = experiment_type
+        if experiment_name == 'AL_Methods':
+            al_method_ =  [k for k, v in al_switcher_.items() if v.__name__ == experiment_title][0]
+        if experiment_name == 'ML_Methods':
+            ml_method_ =  [k for k, v in ML_switcher.items() if type(v).__name__ == experiment_title][0]
         file_path = "../Figures/" + experiment_name + "/Aggregate_Results/" + experiment_title + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
-        for performance_metric_name, performance in aggregate_ci_results[experiment_type].items():
-            file_name = 'All Datasets Aggregate ' + performance_metric_name + ' Results for ' + experiment_title + ' Class Ratio'
-            plot_results([], performance, performance_metric_name, False, file_name, 2, 1, save_=True,
+        for performance_metric_name, performance in aggregate_results[experiment_type].items():
+            if experiment_name == 'Class_Imbalance':
+                file_name = 'All Datasets Aggregate ' + performance_metric_name + ' Results for ' + experiment_title + ' Class Ratio'
+            else:
+                file_name = 'All Datasets Aggregate ' + performance_metric_name + ' Results for ' + experiment_title
+            plot_results([], performance, performance_metric_name, False, file_name, al_method_, ml_method_, save_=True,
                          normalize_data_=False, prop_performance_=False, file_path_=file_path,
-                         data_title_='Aggregate OpenML')
+                         data_title_='Aggregate OpenML', al_dict_=al_switcher_)
 
 
 # In[21]:
@@ -375,7 +422,6 @@ def plot_aggregate_comparison(experiment_name, aggregate_ci_results):
             for experiment_performance_name, experiment_performance in aggregate_ci_results[experiment_type].items():
                 if experiment_performance_name == performance_metric_name:
                     results_for_performance_metric.append(experiment_performance)
-        file_name = 'All Datasets Aggregate ' + performance_metric_name + ' Comparison for ' + experiment_name
         plot_multiple(results_for_performance_metric, performance_metric_name, setting_names_=aggregate_list,
                       experiment_type_=experiment_name,
                       save_=True, file_path_=file_path, dataset_name_='aggregate')

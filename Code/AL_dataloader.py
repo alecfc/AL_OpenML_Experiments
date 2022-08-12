@@ -149,7 +149,7 @@ class Dataset:
 
     def proposal_epsilon_greedy(self):
         x = self.pool_dataset[1]
-        epsilon = 0.1
+        epsilon = 0.0001
         if self.acquired_dataset is not None:
             x_train = self.acquired_dataset[1]
             distances = np.zeros_like(self.pool_dataset[1])
