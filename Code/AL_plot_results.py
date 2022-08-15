@@ -3,8 +3,10 @@
 import os, sys;
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import imgkit
+from IPython.display import display
 from collections import Counter
-
+from scipy.stats import wilcoxon
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -474,3 +476,73 @@ def plot_heatmap(matrix_, threshold, bin_size, name, target_ids: np.array):
 
     plt.savefig("../Figures/" + name + "_heat.png", bbox_inches='tight')
     plt.show()
+
+
+def color_invalid_red(val):
+    color = 'red' if val > 0.05 else 'black'
+    return 'color: %s' % color
+
+
+# calculate the ALC value given a set of AUC scores over the course of training
+def calc_alc(auc_row):
+    x = range(len(auc_row))
+    x = x[1:]
+    y = auc_row
+    rand_predict = auc_row[0]
+    y = auc_row[1:]
+
+    x = np.log2(x)
+    A = trapz(y)
+    Arand = rand_predict * x[-1]
+    Amax = x[-1]
+
+    global_score = (A - Arand) / (Amax - Arand)
+
+    #     print("ALC is: ", global_score)
+    return (global_score)
+
+# Perform the Wilcoxon signed-rank test for the ALC scores of different methods. Make sure the number of runs and queries per run are the same
+def wsrt(result_strings, save=False):
+    method_names = np.empty(len(result_strings), dtype='U100')
+    results_table = np.empty((0, len(result_strings)), dtype='float')
+    for i, string in enumerate(result_strings):
+        method_names[i] = string.split("_")[0]
+
+    for result_string1 in result_strings:
+        results1 = pd.read_pickle("../Results/" + result_string1 + "AUC.pkl")
+        alc_scores_1 = results1.apply(calc_alc, axis=1)
+        results_array = np.empty(len(result_strings))
+
+        for j, result_string2 in enumerate(result_strings):
+            if result_string1 != result_string2:
+                results2 = pd.read_pickle("../Results/" + result_string2 + "AUC.pkl")
+                alc_scores_2 = results2.apply(calc_alc, axis=1)
+                p_value = wilcoxon(alc_scores_1, alc_scores_2, correction=False)
+                results_array[j] = p_value[1]
+            #                 print("For ", result_string1, " and ", result_string2, " the p-value given the ALC scores is :\n", p_value[1], "\n")
+            else:
+                results_array[j] = float('NaN')
+        #             print(results_array[i])
+
+        #         print(results_array)
+        #         np.append(arr, np.array([[1,2,3]]), axis=0)
+        #         results_table = np.append(results_table, results_array, axis=0)
+        results_table = np.vstack((results_table, results_array))
+    results_table = pd.DataFrame(results_table, index=method_names, columns=method_names)
+    #     pd.options.display.float_format = '{:.2e}'.format
+    #     pd.options.display.float_format = '{:.2f}'.format
+    #     pd.set_option('display.float_format', lambda x: '%.3f' % x)
+    #     pd.set_option('display.float_format', lambda x: f'{x:,.3f}')
+    with pd.option_context('display.max_rows', 5, 'display.max_columns', 5):
+        pd.set_option('display.float_format', '{:.2e}'.format)
+        #         display(results_table)
+        pd.set_option("display.precision", 1)
+        results_table.style
+        display(results_table.style.applymap(color_invalid_red).format('{:.2E}', na_rep='NA'))
+
+        config = imgkit.config(
+            wkhtmltoimage='/data/sammeyer/.conda/envs/AL_project/bin/wkhtmltoimage')  # , xvfb='/opt/bin/xvfb-run'
+        html = results_table.style.set_properties(**{'background-color': 'ghostwhite',
+                                                     'color': 'black',
+                                                     'border-color': 'white'}).render()
+        imgkit.from_string(html, '../ResultFigs/wsrt_table.png', config=config)

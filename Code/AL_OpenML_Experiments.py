@@ -42,28 +42,7 @@ from AL_utils import *
 warnings.filterwarnings(
     'ignore')  # precision often has cases where there are no predictions for the minority class, which leads to zero-division. This keeps that warning from showing up.
 
-# In[2]:
-openml_list = openml.datasets.list_datasets()  # returns a dict
-
-# Show a nice table with some key data properties
-datalist = pd.DataFrame.from_dict(openml_list, orient="index")
-datalist = datalist[["did", "name", "NumberOfInstances", "NumberOfFeatures", "NumberOfClasses"]]
-
-print(f"First 10 of {len(datalist)} datasets...")
-datalist.head(n=10)
-
-# The same can be done with lesser lines of code
-openml_df = openml.datasets.list_datasets(output_format="dataframe")
-openml_df.head(n=10)
-
 ML_results_fully_trained = []
-
-
-# In[3]:
-
-
-# In[8]:
-
 
 def test_model_performance(model, X_test, y_test):
     result_dict = {'Accuracy': 0.0, 'F1': 0.0, 'Recall': 0.0, 'Precision': 0.0, "AUC": 0.0, "Log Loss": 0.0}
@@ -130,68 +109,15 @@ def evaluate_all_models(X, y, X_list, y_list):
 
     return X_train, X_test, y_train, y_test, ML_results_fully_trained, ML_results_subsample_trained, ML_results_subsample_trained_biased
 
-
-# In[12]:
-
-
-# The base definitions of all test settings. These are set with new values when calling the run_test method (or set_settings method).
-
-# Ideally will have at least 50 repetitions of validation of one method to get a good idea of performance. repetitions = K * EXECUTIONS
-K = 5  # number of folds for validation
-EXECUTIONS = 10  # number of executions of k-fold validation
-
-# Number of queries per round of learning. The main testing loops in run_test could be adapted to not be static. E.g. until convergence, or some other stopping criterion. 
-# However, for evaluation it is easier if all methods are tested with the same number of queries (requirement of Area Under the Learning Curve measure (ALC)).
-# Performance is evaluated after each instance is queried and added to the training pool.
-N_QUERIES = 100
-
-# size of initialization set. Needs to be at least the # classes, but more if QBC used.
-INITIALIZATION_SET = 10
-
-# Whether to train/evaluate only on the summarized trajectories, ele all instances of each trajectory are used for training.
-TRAIN_ON_SUM = True
-
-# Whether separte classifiers should be used for querying and classifying (producer/consumer respectively)
-# *note, for QBC should petty much always use separate model. Really doesn't make sense not to.
-SEPARATE_CLASSIFIER = False
-
-# Classifier to be used:
-# 1 = logistic regression, 2 = Random Forest, 3 = XGBoost, 4 = Decision Tree, 5 = SVM (linear version)
-ML_METHOD = 3
-ML_SEP_METHOD = 3  # only relevant if using separate classifier as query producer. Overridden when using QBC
-
-# Active learning approach to be used:
-# 1 = random sampling, 2 = uncertainty sampling, 3 = density-weighted sampling, 4 = EER, 5 = QBC, 6 = PAL, 7 = XPAL
-AL_METHOD = 6
-EXP_TYPE = 'Class_Imbalance'
 # Specific learners used for the committee in QBC
-QBC_LEARNERS = [2, 3, 5]
+QBC_LEARNERS = [2, 3]
 
 # The number of learners of each classifier type specified by QBC_LEARNERS to be used in QBC
-N_QBC_LEARNERS = 3
+N_QBC_LEARNERS = 4
 
 # Selection of QBC disagreement measure
 # vote_entropy_sampling, consensus_entropy_sampling, max_disagreement_sampling
 QBC_STRATEGY = max_disagreement_sampling
-
-# Set whether to oversample, undersample, or neither. Should NOT have over- and undersampling both be True
-OVERSAMPLE = False
-UNDERSAMPLE = False
-SAMPLING_RATIO = 0.25
-
-# Weighing factor, (in favor of the target class)
-WEIGHTING_FACTOR = 0.15
-
-# Whether to scale data and apply PCA (PCA currently disabled -> commented out)
-SC_PCA = False
-
-# whether to save results from current test as figures
-SAVEFIGS = False
-SAVERATIO = False
-SAVERESULTS = True
-
-
-# In[13]:
 
 
 # Method for altering settings between runs. Settings that should generally stay consistent between runs are not changed by this method. 
@@ -256,90 +182,6 @@ def determine_initial_set(x, y, prob_ratio, size_initial):
             x, y = np.delete(x, rand_idx, axis=0), np.delete(y, rand_idx)
             count_1 += 1
 
-
-# x = np.array(['a','d','s','a','r','e','w','w','sd','as','rr','tt'])
-# y=np.array([0,1,0,1,1,0,1,0,0,1,0,1])
-# x, y = determine_initial_set(x, y, 0.2, 6)
-
-def train(
-        model,
-        train_loader,
-        optimizer,
-        weighting_scheme,
-        _run=None,
-        for_acquisition=False
-):
-    """
-    Helper function to execute a single epoch of training.
-    """
-    model.train()
-    # avg_train_loss = 0
-    raw_loss = torch.nn.NLLLoss()
-
-    # losses = []
-    for batch_idx, (data_N_C_H_W, target, weight) in enumerate(train_loader):
-        data_N_C_H_W = data_N_C_H_W.cuda()
-        target = target.cuda()
-        weight = weight.cuda()
-
-        optimizer.zero_grad()
-
-        prediction = model(data_N_C_H_W)  # Always uses 1 when not doing consistent.
-
-        loss = (weight * raw_loss(prediction, target)).mean(0)
-
-        loss.backward()
-        # avg_train_loss = (avg_train_loss * batch_idx + loss.item()) / (batch_idx + 1)
-        optimizer.step()
-
-        # losses.append(loss.item())
-        # print(f'Epoch: {epoch}:')
-    # print(f'Train Set: Average Loss: {avg_train_loss:.6f}')
-
-
-def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks,
-              overall_uniform_risks, true_risk, n_runs):
-    c = sns.color_palette()
-
-    def series(risks):
-        overall_risks_array = np.array(risks)
-        risk_mean = np.mean(overall_risks_array, axis=0)
-        if overall_risks_array.shape[0] != 1:
-            risk_std = np.std(overall_risks_array, axis=0)
-            risk_se = risk_std / np.sqrt(overall_risks_array.shape[0] - 1)
-        else:
-            risk_se = 0
-        x = np.arange(len(risk_mean))
-        return x, risk_mean, risk_se
-
-    weighted_x, weighted_mean, weighted_se = series(overall_weighted_risks)
-    plt.plot(weighted_x, weighted_mean, label="Weighted")
-    plt.fill_between(weighted_x, weighted_mean + weighted_se, weighted_mean - weighted_se, alpha=0.3)
-
-    # unweighted_x, unweighted_mean, unweighted_se = series(overall_unweighted_risks)
-    # plt.plot(unweighted_x, unweighted_mean, label="Unweighted")
-    # plt.fill_between(unweighted_x, unweighted_mean + unweighted_se, unweighted_mean - unweighted_se, alpha=0.3)
-
-    rb_x, rb_mean, rb_se = series(overall_rb_risks)
-    plt.plot(rb_x, rb_mean, label="Rao-Blackwell")
-    plt.fill_between(rb_x, rb_mean + rb_se, rb_mean - rb_se, alpha=0.3)
-
-    r_rb_x, r_rb_mean, r_rb_se = series(overall_refined_rb_risks)
-    plt.plot(r_rb_x, r_rb_mean, label="Refined Rao-Blackwell")
-    plt.fill_between(r_rb_x, r_rb_mean + r_rb_se, r_rb_mean - r_rb_se, alpha=0.3)
-
-    # uniform_x, uniform_mean, uniform_se = series(overall_uniform_risks)
-    # plt.plot(uniform_x, uniform_mean, label="Uniform")
-    # plt.fill_between(uniform_x, uniform_mean + uniform_se, uniform_mean - uniform_se, alpha=0.3)
-
-    plt.hlines(true_risk, 0, len(weighted_x), label="True Risk")
-    plt.xlabel("Number of Sampled Points")
-    plt.ylabel("Empirical Risk")
-    plt.title("Empirical Risk Convergence Under Different Weighting Schemes")
-    plt.legend()
-    plt.savefig(f"plots/toy_fn_comparison_{n_runs}.pdf", bbox_inches="tight", dpi=300)
-
-
 # @jit
 def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_class_ratio_, initial_ratio_,
                 initial_size_, ml_method_,
@@ -385,10 +227,6 @@ def run_AL_test(X, y, X_df, k_, execs_, n_queries_, n_instantiations_, original_
             y_test = y[train_set_indices[i][1]]
 
             for j in range(n_instantiations_):
-
-                # X_train_copy = X_train.copy()
-                # y_train_copy = y_train.copy()
-                predictions = []
 
                 if al_method_ == 5 or al_method_ == 6 or al_method_ == 9:
                     x_initial, y_initial, X_temp, y_temp, y_list = determine_initial_set(X_train, y_train,
@@ -636,7 +474,6 @@ def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_):
             df = pd.DataFrame(columns=range(n_queries_ + 1))
 
         class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
-        dataset_str = dataset.name + ' class ratio ' + str(class_ratio)
         df, file_name = dataset_performance_measure_results(
             '../Results/' + exp_type_ + '/' + exp_sub_type_ + '/' + measure_ + '/', df, dataset.name)
         file_name = file_name.replace('.pkl','')
@@ -676,6 +513,7 @@ def read_dataset_results(base_filepath_, n_queries_, dataset_name_, data_size=50
         for exp_type_result in os.scandir(exp_folder):
             df_results[exp_folder.name][exp_type_result.name], file_name = dataset_performance_measure_results(
                 exp_type_result.path, df_results[exp_folder.name][exp_type_result.name], dataset_name_)
+
     return df_results
 
 
@@ -748,9 +586,6 @@ def ci_run_single_dataset(X_list, y_list, al_method, ml_method, X_df, ML_results
 
 
 def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained, al_dict):
-    # Iterate through all active learning methods
-    # active_learning_methods = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling',
-    #                           'hierarchical_sampling', 'quire']
     active_learning_methods = []
     original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for al_method_number, al_method in al_dict.items():
@@ -788,10 +623,6 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained, al_di
                                        setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
                                        initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
 
-
-# In[26]:
-
-
 def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
     # Perform the active learning querying cycle for all different machine learning classifiers on a single dataset
     ml_method_numbers = [1, 2, 3]
@@ -824,20 +655,15 @@ def ml_run_single_dataset(X, y, al_method, X_df, ML_results_fully_trained):
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/ML_Methods/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='ML Methods',
-                                       setting_names_=ml_methods, dataset_name_=dataset.name,
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
                                        initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
 
 
 def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_trained):
     # Iterate through all active learning methods
-    auc_list = []
-    ratio_list = []
     class_ratios = [0.1, 0.5, 0.25]
-    full_class_ratios = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
-    init_ratios = []
     original_class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
     for idx, init_ratio in enumerate(class_ratios):
-        init_ratios.append('Initial class ratio ' + str(init_ratio))
         print('Evaluating initial class ratio of', str(init_ratio), 'with', type(ML_switcher[ml_method]).__name__,
               'classifier', 'and', AL_switcher[al_method].__name__)
         file_path = "../Figures/Initial_Class_Ratio/" + dataset.name + '/' + 'Initial class ratio ' + str(
@@ -860,11 +686,8 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
         compare_results_single_dataset(all_dataset_results_=all_dataset_results,
                                        file_path_="../Figures/Initial_Class_Ratio/" + dataset.name + '/',
                                        measure_name_=measure_name, experiment_type_='Initial Class Ratio',
-                                       setting_names_=full_class_ratios, dataset_name_=dataset.name,
+                                       setting_names_=list(all_dataset_results.keys()), dataset_name_=dataset.name,
                                        initial_labels_=[0,0,0,0,0,1,1,1,1,1], original_class_ratio_=original_class_ratio)
-
-
-# In[27]:
 
 def preprocess_openML_dataset(dataset):
     X_df, y_df, categorical_indicator, attribute_names = dataset.get_data(
@@ -882,9 +705,6 @@ def preprocess_openML_dataset(dataset):
     number_minority = Counter(y)[1]
 
     return X_df, y_df, X, y, number_majority, number_minority
-
-
-# In[28]:
 
 def create_openML_subsamples(X, y):
     rus = RandomUnderSampler(random_state=42, sampling_strategy=ratio_multiplier(y=y, ratio=0.5))
@@ -908,7 +728,6 @@ def create_openML_subsamples(X, y):
 
 
 def run_openML_test(experiment_):
-    performance_results = []
     n_queries = 100
     ml_method = 2
     al_method = 2
@@ -941,9 +760,6 @@ def run_openML_test(experiment_):
     agg_measure_results = read_aggregate_results('../Results/' + experiment_ + '/', n_queries)
     plot_aggregate_results(experiment_, agg_measure_results, al_method, ml_method, al_dict)
     plot_aggregate_comparison(experiment_, agg_measure_results)
-
-    # for
-    #    plot_aggregate_graphs()
 
 
 def plot_all(exp_type_, subsets_):
@@ -987,8 +803,8 @@ if __name__ == "__main__":
     # Main experiments
     #run_openML_test(experiment_='Class_Imbalance')
     #run_openML_test(experiment_='AL_Methods')
-    run_openML_test(experiment_='ML_Methods')
-    run_openML_test(experiment_='Initial_Class_Ratio')
+    #run_openML_test(experiment_='ML_Methods')
+    #run_openML_test(experiment_='Initial_Class_Ratio')
 
     # Replot single
     subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
@@ -997,7 +813,7 @@ if __name__ == "__main__":
     subsets_init = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
 
     subsets_al2 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'hierarchical_sampling', 'quire', 'albl']
-    #plot_all(exp_type_='ML_Methods', subsets_=subsets_ml)
+    plot_all(exp_type_='ML_Methods', subsets_=subsets_ml)
 
     print('Done')
 # Test example

@@ -10,6 +10,84 @@ from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 from AL_utils import get_top_n
 import collections
 
+def train(
+        model,
+        train_loader,
+        optimizer,
+        weighting_scheme,
+        _run=None,
+        for_acquisition=False
+):
+    """
+    Helper function to execute a single epoch of training.
+    """
+    model.train()
+    # avg_train_loss = 0
+    raw_loss = torch.nn.NLLLoss()
+
+    # losses = []
+    for batch_idx, (data_N_C_H_W, target, weight) in enumerate(train_loader):
+        data_N_C_H_W = data_N_C_H_W.cuda()
+        target = target.cuda()
+        weight = weight.cuda()
+
+        optimizer.zero_grad()
+
+        prediction = model(data_N_C_H_W)  # Always uses 1 when not doing consistent.
+
+        loss = (weight * raw_loss(prediction, target)).mean(0)
+
+        loss.backward()
+        # avg_train_loss = (avg_train_loss * batch_idx + loss.item()) / (batch_idx + 1)
+        optimizer.step()
+
+        # losses.append(loss.item())
+        # print(f'Epoch: {epoch}:')
+    # print(f'Train Set: Average Loss: {avg_train_loss:.6f}')
+
+
+def plot_risk(overall_weighted_risks, overall_unweighted_risks, overall_rb_risks, overall_refined_rb_risks,
+              overall_uniform_risks, true_risk, n_runs):
+    c = sns.color_palette()
+
+    def series(risks):
+        overall_risks_array = np.array(risks)
+        risk_mean = np.mean(overall_risks_array, axis=0)
+        if overall_risks_array.shape[0] != 1:
+            risk_std = np.std(overall_risks_array, axis=0)
+            risk_se = risk_std / np.sqrt(overall_risks_array.shape[0] - 1)
+        else:
+            risk_se = 0
+        x = np.arange(len(risk_mean))
+        return x, risk_mean, risk_se
+
+    weighted_x, weighted_mean, weighted_se = series(overall_weighted_risks)
+    plt.plot(weighted_x, weighted_mean, label="Weighted")
+    plt.fill_between(weighted_x, weighted_mean + weighted_se, weighted_mean - weighted_se, alpha=0.3)
+
+    # unweighted_x, unweighted_mean, unweighted_se = series(overall_unweighted_risks)
+    # plt.plot(unweighted_x, unweighted_mean, label="Unweighted")
+    # plt.fill_between(unweighted_x, unweighted_mean + unweighted_se, unweighted_mean - unweighted_se, alpha=0.3)
+
+    rb_x, rb_mean, rb_se = series(overall_rb_risks)
+    plt.plot(rb_x, rb_mean, label="Rao-Blackwell")
+    plt.fill_between(rb_x, rb_mean + rb_se, rb_mean - rb_se, alpha=0.3)
+
+    r_rb_x, r_rb_mean, r_rb_se = series(overall_refined_rb_risks)
+    plt.plot(r_rb_x, r_rb_mean, label="Refined Rao-Blackwell")
+    plt.fill_between(r_rb_x, r_rb_mean + r_rb_se, r_rb_mean - r_rb_se, alpha=0.3)
+
+    # uniform_x, uniform_mean, uniform_se = series(overall_uniform_risks)
+    # plt.plot(uniform_x, uniform_mean, label="Uniform")
+    # plt.fill_between(uniform_x, uniform_mean + uniform_se, uniform_mean - uniform_se, alpha=0.3)
+
+    plt.hlines(true_risk, 0, len(weighted_x), label="True Risk")
+    plt.xlabel("Number of Sampled Points")
+    plt.ylabel("Empirical Risk")
+    plt.title("Empirical Risk Convergence Under Different Weighting Schemes")
+    plt.legend()
+    plt.savefig(f"plots/toy_fn_comparison_{n_runs}.pdf", bbox_inches="tight", dpi=300)
+
 
 class Dataset:
     def __init__(self, pool_dataset, validation_dataset, test_dataset, true_function, acquired_dataset):
