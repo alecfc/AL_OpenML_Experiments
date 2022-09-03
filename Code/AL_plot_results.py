@@ -1,21 +1,17 @@
 # from pip command
 
-import os, sys;
-
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import os
+import sys
 import imgkit
-from IPython.display import display
-from collections import Counter
-from scipy.stats import wilcoxon
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import numpy as np
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import pandas as pd
-import plotly.graph_objects as go
 import seaborn as sn
-from numpy import trapz
-
-from AL_plot_results import *
+import matplotlib.pyplot as plt
+from IPython.display import display
+import matplotlib as mpl
+import numpy as np
+import plotly.graph_objects as go
+from scipy.stats import wilcoxon
 
 from AL_methods import *
 
@@ -94,7 +90,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
     ax.grid(True)
 
     ax.set_title(data_title_ + ' Incremental Classification ' + measure_name_ + ": " + al_dict_[
-        al_method_].__name__ + ' using ' + type(ML_switcher[ml_method_]).__name__ + ' classifier')  # change later
+        al_method_].__name__ + ' using ' + type(ML_switcher[ml_method_]).__name__ + ' classifier')
 
     ax.set_ylabel('Classification ' + measure_name_)
     #     ax.legend(loc="lower right")
@@ -107,7 +103,7 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
         y = mean_performance[1:]
 
         x = np.log2(x)
-        A = trapz(y)
+        A = np.trapz(y)
         Arand = rand_predict * x[-1]
         Amax = x[-1]
 
@@ -277,7 +273,7 @@ def plot_multiple_bias(initial_labels_, labels_, original_class_ratio_, save_, f
         class_ratios = [0.25, 0.05, 0.5, original_class_ratio_]
         original_class_ratio_ = class_ratios
     elif experiment_type_ == 'Initial Class Ratio':
-        init_ratios = [0.1, 0.5, 0.25]
+        init_ratios = [0.1, 0.25, 0.5]
     ax.set_title(
         dataset_name_ + ': Comparison of Bias Through Class Ratio Difference Using Original Ratio of ' + str(original_class_ratio_))
     for idx, label in enumerate(labels_):
@@ -325,7 +321,7 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
         plt.savefig(string, bbox_inches='tight')
     # plt.show()
 
-def plot_class_per_sample(labels_, original_class_ratio_, save_, name_, file_path_, dataset_name_):
+def plot_class_per_sample(labels_, save_, name_, file_path_, dataset_name_, al_method_, ml_method_, al_dict_=AL_switcher):
     sn.set_theme()
     proportion_per_query = []
     num_zeroes = []
@@ -335,8 +331,13 @@ def plot_class_per_sample(labels_, original_class_ratio_, save_, name_, file_pat
     for (columnName, columnData) in labels_.iteritems():
         num_zeroes.append(columnData.loc[columnData < 1].count()/total_per_exec)
         num_ones.append(columnData.loc[columnData == 1].count()/total_per_exec)
-    df = pd.DataFrame(list(zip(num_zeroes, num_ones)), index=range(1,len(labels_.T[0])+1), columns=['Negative Class', 'Positive Class'], )
-    (df*100).plot.bar(title=dataset_name_ + ': Proportion of Selected Classes per Query', stacked=True, figsize=(18, 6))
+    queries = list(range(1,len(labels_.T[0])+1))
+    for j, quartile_result in enumerate(queries):
+        if (j+1) % 5 != 0:
+            queries[j] = ''
+    df = pd.DataFrame(list(zip(num_zeroes, num_ones)), index=queries, columns=['Majority (Negative) Class', 'Minority (Positive) Class'], )
+    (df*100).plot.bar(title=dataset_name_ + ': Proportion of Selected Classes per Query using ' + al_dict_[
+        al_method_].__name__ + ' and ' + type(ML_switcher[ml_method_]).__name__ + ' classifier', stacked=True, figsize=(18, 6))
     plt.legend(loc='upper right')
     plt.xlabel('Query Iteration')
     plt.ylabel('Percentage of Chosen Classes')
@@ -492,7 +493,7 @@ def calc_alc(auc_row):
     y = auc_row[1:]
 
     x = np.log2(x)
-    A = trapz(y)
+    A = np.trapz(y)
     Arand = rand_predict * x[-1]
     Amax = x[-1]
 
@@ -541,8 +542,8 @@ def wsrt(result_strings, save=False):
         display(results_table.style.applymap(color_invalid_red).format('{:.2E}', na_rep='NA'))
 
         config = imgkit.config(
-            wkhtmltoimage='/data/sammeyer/.conda/envs/AL_project/bin/wkhtmltoimage')  # , xvfb='/opt/bin/xvfb-run'
+            wkhtmltoimage='wkhtmltoimage')  # , xvfb='/opt/bin/xvfb-run'
         html = results_table.style.set_properties(**{'background-color': 'ghostwhite',
                                                      'color': 'black',
                                                      'border-color': 'white'}).render()
-        imgkit.from_string(html, '../ResultFigs/wsrt_table.png', config=config)
+        imgkit.from_string(html, '../Wilcoxon_Tables/wsrt_table.png', config=config)

@@ -1,34 +1,21 @@
-import numpy as np
-import math
-from collections import Counter
-import xgboost
-
-from modAL.uncertainty import uncertainty_sampling
-from modAL.density import information_density
-from modAL.utils.selection import shuffled_argmax
 from sklearn.exceptions import NotFittedError
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
+import math
 import math
 from collections import Counter
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import numpy as np
+import torch
+import torch.nn as nn
 import xgboost
 from modAL.density import information_density
 from modAL.uncertainty import uncertainty_sampling
 from modAL.utils.selection import shuffled_argmax
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
-from libact.query_strategies import UncertaintySampling
-from libact.query_strategies.multiclass import HierarchicalSampling
-from libact.query_strategies import QUIRE
-from libact.query_strategies import DWUS
-from libact.query_strategies import ActiveLearningByLearning
-from libact.query_strategies import RandomSampling
+
+
 # from pip command
 
 def ratio_multiplier(y, ratio):
@@ -126,9 +113,9 @@ AL_switcher = {
 }
 
 AL_switcher2 = {
-    1: random_sampling,
-    2: uncertainty_sampling,
-    3: density_sampling,
+    #1: random_sampling,
+    #2: uncertainty_sampling,
+    #3: density_sampling,
     5: hierarchical_sampling,
     6: quire,
     #7: r_lure,
