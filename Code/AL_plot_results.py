@@ -96,25 +96,13 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
     #     ax.legend(loc="lower right")
 
     if measure_name_ == 'AUC':
-        x = plot_range
-        x = x[1:]
-        y = mean_performance
-        rand_predict = mean_performance[0]
-        y = mean_performance[1:]
-
-        x = np.log2(x)
-        A = np.trapz(y)
-        Arand = rand_predict * x[-1]
-        Amax = x[-1]
-
-        global_score = (A - Arand) / (Amax - Arand)
-
-        print("ALC is: ", global_score)
+        alc = calc_alc(pd.Series(mean_performance))
+        print("ALC is: ", alc)
 
         if save_:
             string = file_path_ + name_ + "_" + "ALC" + ".txt"
             text_file = open(string, "w")
-            n = text_file.write(str(global_score))
+            n = text_file.write(str(alc))
             text_file.close()
 
     if measure_name_ != "Label Ratio":
@@ -488,36 +476,40 @@ def color_invalid_red(val):
 def calc_alc(auc_row):
     x = range(len(auc_row))
     x = x[1:]
-    y = auc_row
-    rand_predict = auc_row[0]
-    y = auc_row[1:]
-
+    auc_row = auc_row[1:]
     x = np.log2(x)
+    auc_row = auc_row.set_axis(x)
+    y = auc_row
     A = np.trapz(y)
-    Arand = rand_predict * x[-1]
-    Amax = x[-1]
+    Amax = np.trapz(pd.Series(1, index=x))
+    Arand = np.trapz(pd.Series(0.5, index=x))
+    #Arand = rand_predict * x[-1]
+
+    #Amax = x[-1]
 
     global_score = (A - Arand) / (Amax - Arand)
 
     #     print("ALC is: ", global_score)
     return (global_score)
 
+
+
 # Perform the Wilcoxon signed-rank test for the ALC scores of different methods. Make sure the number of runs and queries per run are the same
-def wsrt(result_strings, save=False):
-    method_names = np.empty(len(result_strings), dtype='U100')
-    results_table = np.empty((0, len(result_strings)), dtype='float')
-    for i, string in enumerate(result_strings):
-        method_names[i] = string.split("_")[0]
+def wsrt(auc_list, method_names):
+    results_table = np.empty((0, len(auc_list)), dtype='float')
 
-    for result_string1 in result_strings:
-        results1 = pd.read_pickle("../Results/" + result_string1 + "AUC.pkl")
-        alc_scores_1 = results1.apply(calc_alc, axis=1)
-        results_array = np.empty(len(result_strings))
-
-        for j, result_string2 in enumerate(result_strings):
-            if result_string1 != result_string2:
-                results2 = pd.read_pickle("../Results/" + result_string2 + "AUC.pkl")
-                alc_scores_2 = results2.apply(calc_alc, axis=1)
+    for i, auc_table1 in enumerate(auc_list):
+        results_array = np.empty(len(auc_list))
+        alc_scores_1 = auc_table1.apply(calc_alc, axis=1)
+        for j, auc_table2 in enumerate(auc_list):
+            if i != j:
+                alc_scores_2 = auc_table2.apply(calc_alc, axis=1)
+                if len(alc_scores_2) == 25 and len(alc_scores_1) > 25:
+                    alc_scores_1 = alc_scores_1.drop(alc_scores_1.index[25:])
+                if len(alc_scores_1) == 25 and len(alc_scores_2) > 25:
+                    alc_scores_2 = alc_scores_2.drop(alc_scores_2.index[25:])
+                #alc_scores_1 = np.average(alc_scores_1.to_numpy())
+                #alc_scores_2 = np.average(alc_scores_2.to_numpy())
                 p_value = wilcoxon(alc_scores_1, alc_scores_2, correction=False)
                 results_array[j] = p_value[1]
             #                 print("For ", result_string1, " and ", result_string2, " the p-value given the ALC scores is :\n", p_value[1], "\n")
@@ -535,14 +527,14 @@ def wsrt(result_strings, save=False):
     #     pd.set_option('display.float_format', lambda x: '%.3f' % x)
     #     pd.set_option('display.float_format', lambda x: f'{x:,.3f}')
     with pd.option_context('display.max_rows', 5, 'display.max_columns', 5):
-        pd.set_option('display.float_format', '{:.2e}'.format)
+        pd.set_option('display.float_format', '{:.2f}'.format)
         #         display(results_table)
-        pd.set_option("display.precision", 1)
+        #pd.set_option("display.precision", 2)
         results_table.style
-        display(results_table.style.applymap(color_invalid_red).format('{:.2E}', na_rep='NA'))
+        display(results_table.style.applymap(color_invalid_red).format('{:.2F}', na_rep='NA'))
 
         config = imgkit.config(
-            wkhtmltoimage='wkhtmltoimage')  # , xvfb='/opt/bin/xvfb-run'
+            wkhtmltoimage='C:\\Users\\alecf\\Documents\\AI Master\\AL_OpenML_Experiments\\wkhtmltoimage.exe')  # , xvfb='/opt/bin/xvfb-run'
         html = results_table.style.set_properties(**{'background-color': 'ghostwhite',
                                                      'color': 'black',
                                                      'border-color': 'white'}).render()

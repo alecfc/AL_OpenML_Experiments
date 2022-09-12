@@ -113,12 +113,12 @@ AL_switcher = {
 }
 
 AL_switcher2 = {
-    #1: random_sampling,
-    #2: uncertainty_sampling,
-    #3: density_sampling,
+    1: random_sampling,
+    2: uncertainty_sampling,
+    3: density_sampling,
     5: hierarchical_sampling,
     6: quire,
     #7: r_lure,
     #8: r_pure,
-    9: albl
+    7: albl
 }

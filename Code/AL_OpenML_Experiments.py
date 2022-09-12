@@ -145,14 +145,14 @@ def determine_initial_set(X, y, prob_ratio, size_initial):
             x_initial.append(X[rand_idx])
             y_initial.append(y[rand_idx])
             y_list[rand_idx] = y[rand_idx]
-            x, y = np.delete(x, rand_idx, axis=0), np.delete(y, rand_idx)
+            X, y = np.delete(X, rand_idx, axis=0), np.delete(y, rand_idx)
             count_0 += 1
             continue
         elif y[rand_idx] == 1 and (count_1 < number_class_1):
             x_initial.append(X[rand_idx])
             y_initial.append(y[rand_idx])
             y_list[rand_idx] = y[rand_idx]
-            x, y = np.delete(X, rand_idx, axis=0), np.delete(y, rand_idx)
+            X, y = np.delete(X, rand_idx, axis=0), np.delete(y, rand_idx)
             count_1 += 1
 
 
@@ -445,7 +445,7 @@ def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_, al_d
             df = pd.DataFrame(columns=range(n_queries_ + 1))
 
         class_ratio = round(Counter(y)[1] / (Counter(y)[0] + Counter(y)[1]), 3)
-        if X_df.shape[0] > 2534 and exp_sub_type_ == 'quire':
+        if X_df.shape[0] > 3000 and exp_sub_type_ == 'quire':
             al_method = 6
             ml_method = 1
             continue
@@ -470,7 +470,7 @@ def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_, al_d
         plot_results(X, df, measure_, ML_results_fully_trained, measure_ + ' of ' + file_name, al_method,
                      ml_method, True, False, False,
                      '../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/',
-                     data_title_=dataset.name, al_dict_=AL_switcher2)
+                     data_title_=dataset.name, al_dict_=al_dict_)
     return al_method, ml_method
 
 
@@ -487,7 +487,7 @@ def read_dataset_results(base_filepath_, n_queries_, dataset_name_, data_size=50
                            "Loss Difference": pd.DataFrame(columns=range(n_queries_ + 1))}
     df_results = {}
     for exp_folder in os.scandir(base_filepath_):
-        if data_size > 2534 and exp_folder.name == 'quire':
+        if data_size > 3000 and exp_folder.name == 'quire':
             continue
         df_results[exp_folder.name] = performance_metrics.copy()
         for exp_type_result in os.scandir(exp_folder):
@@ -583,7 +583,7 @@ def al_run_single_dataset(X, y, ml_method, X_df, ML_results_fully_trained, al_di
             execs = 5
         else:
             execs = 20
-        if X.shape[0] > 2534 and al_method_number == 6:
+        if X.shape[0] > 3000 and al_method_number == 6:
             continue
         start = time.ctime()
         run_AL_test(X, y, X_df, k_=5, execs_=execs, n_queries_=100,
@@ -730,8 +730,8 @@ def run_openML_test(experiment_):
     """
     n_queries = 100
     ml_method = 1
-    al_method = 2
-    al_dict = AL_switcher2
+    al_method = 3
+    al_dict = AL_switcher
     global dataset
     global EXP_TYPE
     EXP_TYPE = experiment_
@@ -794,22 +794,13 @@ def plot_all(exp_type_, subsets_):
 
 
 if __name__ == "__main__":
-    # This is done based on the dataset name 'cylinder-bands',
-    # amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
-    # ozone-level-8hr:2534, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
-    # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-    # 'kr-vs-kp', 'Bioresponse','spambase', 'wilt',
-    # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
-    #      'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn', 'mushroom',
-    dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'jasmine', 'scene', 'ozone-level-8hr',
+    # Amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
+    # ozone-level-8hr:2534, jasmine: 2984, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
+
+    dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'scene', 'ozone-level-8hr','jasmine',
          'kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn', 'mushroom','PhishingWebsites']
     #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault',
-    #                'jasmine', 'scene', 'ozone-level-8hr',
-    #                'kr-vs-kp', 'Bioresponse', 'spambase', 'wilt', 'churn', 'mushroom',
-    #                'PhishingWebsites']
-    #dataset_list = ['ozone-level-8hr', 'kr-vs-kp', 'Bioresponse', 'spambase', 'wilt', 'churn', 'mushroom',
-    #                'PhishingWebsites']
-    # dataset_list = ['monks-problems-3']
+    #                'scene', 'ozone-level-8hr', 'jasmine'] #QUIRE list
     # To plot aggregate results
     # agg_measure_results = read_aggregate_results('../Results/AL_Methods/', 100)
     # plot_aggregate_results('AL_Methods', agg_measure_results, 2, 1, AL_switcher)
@@ -819,15 +810,15 @@ if __name__ == "__main__":
     # run_openML_test(experiment_='Class_Imbalance')
     # run_openML_test(experiment_='AL_Methods')
     #run_openML_test(experiment_='ML_Methods')
-    run_openML_test(experiment_='AL_Methods')
+    #run_openML_test(experiment_='AL_Methods')
     #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault',
     #                'jasmine', 'scene', 'ozone-level-8hr']  # List for QUIRE
     #run_openML_test(experiment_='Class_Imbalance')
 
-    # run_openML_test(experiment_='Initial_Class_Ratio')
+    #run_openML_test(experiment_='Initial_Class_Ratio')
 
     # Replot single
-    # $subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
+    subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
     #subsets_ci = ['75-25', '95-5', 'Balanced', 'Original']
     #subsets_ml = ['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier']
     #subsets_init = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
@@ -835,8 +826,18 @@ if __name__ == "__main__":
     #    al_method, ml_method = read_and_replot_measure(exp_type_='Class_Imbalance', exp_sub_type_=subset, measure_='Label Ratio',
     #                                                   n_queries_=100)
     #subsets_al2 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'hierarchical_sampling', 'quire', 'albl']
-    #plot_all(exp_type_='AL_Methods', subsets_=subsets_al2)
-
+    # alc_list = [32.77759624609488, 34.041299206614774, 32.30998852894002, 29.667169761926395, 29.16396674151064, 29.70448805105728]
+    plot_all(exp_type_='AL_Methods', subsets_=subsets_al1)
+    # auc_list = []
+    # df = pd.DataFrame(columns=range(100 + 1))
+    # df2 = pd.DataFrame(columns=range(100 + 1))
+    # df, file_name = dataset_performance_measure_results(
+    #     '../Results/AL_Methods/hierarchical_sampling/AUC/', df, 'monks-problems-3')
+    # auc_list.append(df)
+    # df2, file_name = dataset_performance_measure_results(
+    #     '../Results/AL_Methods/quire/AUC/', df2, 'monks-problems-3')
+    # auc_list.append(df2)
+    # wsrt(auc_list, ['hierarchical_sampling', 'quire'])
     #agg_measure_results = read_aggregate_results('../Results/AL_Methods', 100)
 
 
