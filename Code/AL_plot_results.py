@@ -18,6 +18,9 @@ from AL_methods import *
 
 # from pip command
 def init_set_generator(prob_ratio, size_initial):
+    """"
+    Generates initial set with size and ratio, used for replotting results.
+    """
     number_class_1 = int(round(prob_ratio * size_initial))
     number_class_0 = int(size_initial - number_class_1)
     list_zeroes = np.zeros((number_class_0,), dtype=int)
@@ -28,6 +31,9 @@ def init_set_generator(prob_ratio, size_initial):
 def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, al_method_, ml_method_, save_=False,
                  normalize_data_=False,
                  prop_performance_=False, file_path_='../Figures/', data_title_='', al_dict_=AL_switcher):
+    """"
+    Plots results for a single performance metric, using mean performance and lower and upper quartiles.
+    """
     mean_performance = results_.describe().loc[['mean'], :].to_numpy()[0]
     lower_quartiles = results_.describe().loc[['25%'], :].to_numpy()[0]
     upper_quartiles = results_.describe().loc[['75%'], :].to_numpy()[0]
@@ -122,6 +128,9 @@ def plot_results(X, results_, measure_name_, ML_results_fully_trained_, name_, a
 
 
 def plot_3d_results(results_, metric_name_, save_, file_path_, z_labels_, experiment_type_, dataset_name_):
+    """"
+    Plots 3D results for multiple settings of an experiment.
+    """
     sn.set_theme()
     data = []
     title = '3D Comparison of ' + metric_name_ + ' for the ' + experiment_type_ + ' experiment on the ' + dataset_name_ + ' dataset'
@@ -166,6 +175,9 @@ def plot_3d_results(results_, metric_name_, save_, file_path_, z_labels_, experi
 
 
 def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save_, file_path_, dataset_name_):
+    """"
+    Plots multiple settings in single graph.
+    """
     sn.set_theme()
     data = []
     colors = ['#B42B2D', '#0E84FA', '#FAAB0E', '#121110', '#249338', '#894CB6']
@@ -222,6 +234,9 @@ def plot_multiple(results_, metric_name_, setting_names_, experiment_type_, save
 
 
 def plot_risk_difference(results_, loss_fully_trained_, model_name_, save_, file_path_, name_, dataset_name_):
+    """"
+    Plot for risk difference through difference in log loss over queries.
+    """
     # Plot bias through difference of estimated risk (loss)
     sn.set_theme()
     fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
@@ -250,6 +265,9 @@ def plot_risk_difference(results_, loss_fully_trained_, model_name_, save_, file
 
 # In[18]:
 def plot_multiple_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_, setting_names_, experiment_type_, dataset_name_):
+    """"
+    Plots bias through class ratio difference for multiple settings of a single experiment.
+    """
     fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
     sn.set_theme()
     colors = ['#B42B2D', '#0E84FA', '#FAAB0E', '#121110', '#249338', '#894CB6']
@@ -274,10 +292,10 @@ def plot_multiple_bias(initial_labels_, labels_, original_class_ratio_, save_, f
         if experiment_type_ == 'Class Imbalance':
             original_class_ratio_ = class_ratios[idx]
         for i in top_selected_labels.to_numpy()[0]:
-            current_labels = np.append(current_labels, [i])
             updated_class_ratio = round(
                 Counter(current_labels)[1] / (Counter(current_labels)[0] + Counter(current_labels)[1]), 2)
             ratio_differences.append(original_class_ratio_ - updated_class_ratio)
+            current_labels = np.append(current_labels, [i])
         plt.plot(plot_range, [i for i in ratio_differences], c=colors[idx], label=setting_names_[idx])
     plt.legend(loc="lower right")
     if save_:
@@ -285,6 +303,9 @@ def plot_multiple_bias(initial_labels_, labels_, original_class_ratio_, save_, f
         plt.savefig(string, bbox_inches='tight')
 
 def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_, name_, dataset_name_):
+    """"
+    Plots bias through class ratio difference between labelled dataset over queries and class ratio of original dataset.
+    """
     # Plot our bias difference over time, through calculating the difference between class ratio's
     fig, ax = plt.subplots(figsize=(8.5, 6), dpi=130)
     sn.set_theme()
@@ -293,10 +314,10 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
     ratio_differences = []
     current_labels = initial_labels_
     for label in top_selected_labels.to_numpy()[0]:
-        current_labels = np.append(current_labels, [label])
         updated_class_ratio = round(
             Counter(current_labels)[1] / (Counter(current_labels)[0] + Counter(current_labels)[1]), 2)
         ratio_differences.append(original_class_ratio_ - updated_class_ratio)
+        current_labels = np.append(current_labels, [label])
 
     ax.set_xlabel('Query iteration')
     ax.set_ylabel('Active learning bias through class ratio difference')
@@ -310,6 +331,9 @@ def plot_bias(initial_labels_, labels_, original_class_ratio_, save_, file_path_
     # plt.show()
 
 def plot_class_per_sample(labels_, save_, name_, file_path_, dataset_name_, al_method_, ml_method_, al_dict_=AL_switcher):
+    """"
+    Plots proportion of selected classes per query.
+    """
     sn.set_theme()
     proportion_per_query = []
     num_zeroes = []
@@ -333,7 +357,11 @@ def plot_class_per_sample(labels_, save_, name_, file_path_, dataset_name_, al_m
         string = file_path_ + name_ + '.png'
         plt.savefig(string, bbox_inches='tight')
 
+
 def plot_top_selected_instances(instances, labels, save_, file_path_, name_):
+    """"
+    Plots top selected instances throughout multiple experiment runs.
+    """
     all_instances = []
     for column in instances:
         query_iteration_instances = instances[column].tolist()
@@ -368,6 +396,9 @@ def plot_top_selected_instances(instances, labels, save_, file_path_, name_):
 
 
 def plot_aggregate_results(experiment_name, aggregate_results, al_method_, ml_method_, al_switcher_):
+    """"
+    Plots average graphs for aggregate performance metric results.
+    """
     print('Aggregate Results:')
     for experiment_type, experiment_results in aggregate_results.items():
         experiment_title = experiment_type
@@ -388,10 +419,10 @@ def plot_aggregate_results(experiment_name, aggregate_results, al_method_, ml_me
                          data_title_='Aggregate OpenML', al_dict_=al_switcher_)
 
 
-# In[21]:
-
-
 def plot_aggregate_comparison(experiment_name, aggregate_ci_results):
+    """"
+    Plots comparison of multiple settings for average aggregate performance metric results.
+    """
     print('Comparison of Experiment Settings on Aggregate')
     aggregate_list = list(aggregate_ci_results)
     stored_performance = aggregate_ci_results[aggregate_list[0]].items()
@@ -416,9 +447,6 @@ def plot_aggregate_comparison(experiment_name, aggregate_ci_results):
         plot_multiple(results_for_performance_metric, performance_metric_name, setting_names_=aggregate_list,
                       experiment_type_=experiment_name,
                       save_=True, file_path_=file_path, dataset_name_='aggregate')
-
-
-# In[ ]:
 
 
 # Plot frequency selection heatmap from given dataframe. The matrix is the dataframe containing the frequencies for all trajectories
@@ -496,8 +524,7 @@ def calc_alc(auc_row):
 
 # Perform the Wilcoxon signed-rank test for the ALC scores of different methods. Make sure the number of runs and queries per run are the same
 def wsrt(auc_list, method_names):
-    results_table = np.empty((0, len(auc_list)), dtype='float')
-
+    results_table = np.empty((0, len(method_names)), dtype='float')
     for i, auc_table1 in enumerate(auc_list):
         results_array = np.empty(len(auc_list))
         alc_scores_1 = auc_table1.apply(calc_alc, axis=1)
