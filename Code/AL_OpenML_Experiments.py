@@ -1,47 +1,49 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 import os, sys;
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
-import warnings
-from collections import Counter
-from copy import deepcopy
+
+
+
+
+import openml
+import libact.models
 import time
-import torch
-import torch.optim as optim
 import joblib
+import smote_variants as sv
 
 sys.modules['sklearn.externals.joblib'] = joblib
-import torch.utils.data as data_utils
-from timeit import default_timer as timer
 
-import numpy as np
-import openml
-import pandas as pd
-from sklearn.model_selection import KFold
-# from pip command
 from imblearn.under_sampling import RandomUnderSampler
 from libact.base.dataset import Dataset
 from libact.query_strategies.multiclass import HierarchicalSampling
-from libact.base.interfaces import Labeler, QueryStrategy
-import libact.models
+from copy import deepcopy
 from modAL.disagreement import max_disagreement_sampling, vote_entropy_sampling
 from modAL.models import ActiveLearner, Committee
 from sklearn.metrics import f1_score, recall_score, precision_score, accuracy_score, roc_auc_score, log_loss
 from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from scipy.io import arff
-from AL_methods import *
 from AL_plot_results import *
 from AL_dataloader import *
 from AL_utils import *
 
+
+
 warnings.filterwarnings(
     'ignore')  # precision often has cases where there are no predictions for the minority class, which leads to zero-division. This keeps that warning from showing up.
 
+# List to keep track of fully trained classifier results
 ML_results_fully_trained = []
+
+# Specific learners used for the committee in QBC
+QBC_LEARNERS = [2, 3]
+
+# The number of learners of each classifier type specified by QBC_LEARNERS to be used in QBC
+N_QBC_LEARNERS = 4
+
+# Selection of QBC disagreement measure
+# vote_entropy_sampling, consensus_entropy_sampling, max_disagreement_sampling
+QBC_STRATEGY = max_disagreement_sampling
 
 
 def test_model_performance(model, X_test, y_test):
@@ -57,7 +59,6 @@ def test_model_performance(model, X_test, y_test):
     result_dict['AUC'] = roc_auc_score(y_test, y_pred, average='macro')
     result_dict['Log Loss'] = log_loss(y_test, y_pred)
     return result_dict
-
 
 
 def evaluate_fully_trained(model, X, y):
@@ -113,17 +114,6 @@ def evaluate_all_models(X, y, X_list, y_list):
     return X_train, X_test, y_train, y_test, ML_results_fully_trained, ML_results_subsample_trained, ML_results_subsample_trained_biased
 
 
-# Specific learners used for the committee in QBC
-QBC_LEARNERS = [2, 3]
-
-# The number of learners of each classifier type specified by QBC_LEARNERS to be used in QBC
-N_QBC_LEARNERS = 4
-
-# Selection of QBC disagreement measure
-# vote_entropy_sampling, consensus_entropy_sampling, max_disagreement_sampling
-QBC_STRATEGY = max_disagreement_sampling
-
-
 def determine_initial_set(X, y, prob_ratio, size_initial):
     """
     Creates initial training set with initial set ratio prob_ratio_ and initial size size_initial_.
@@ -155,6 +145,7 @@ def determine_initial_set(X, y, prob_ratio, size_initial):
             X, y = np.delete(X, rand_idx, axis=0), np.delete(y, rand_idx)
             count_1 += 1
 
+
 def determine_initial_set_init_exp(X, y, prob_ratios, size_initial):
     """
     Creates initial training set with initial set ratio prob_ratio_ and initial size size_initial_.
@@ -184,7 +175,7 @@ def determine_initial_set_init_exp(X, y, prob_ratios, size_initial):
                 X_initial_new = X_initial_balanced.copy()
                 y_initial_new = y_initial_balanced.copy()
                 idx_list_new = idx_list.copy()
-                number_class_0_ratio = int(size_initial- int(round(ratio * size_initial))) - number_class_0
+                number_class_0_ratio = int(size_initial - int(round(ratio * size_initial))) - number_class_0
                 count_0 = 0
                 changed = False
                 for i, label in enumerate(list(y_initial_balanced)):
@@ -222,11 +213,11 @@ def determine_initial_set_init_exp(X, y, prob_ratios, size_initial):
             idx_list.append(rand_idx)
             count_1 += 1
 
+
 def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initial_, y_initial_, initial_ratio_,
                 initial_size_, ml_method_,
                 al_method_, qbc_learners_, n_qbc_learners_, save_results_, normalize_data_, prop_performance_,
-                file_path_, ML_results_fully_trained_, exp_subtype_, al_dict_=AL_switcher):
-
+                file_path_, ML_results_fully_trained_, exp_subtype_, al_dict_=AL_switcher, oversampled_=False):
     # Keep track of results for each query. Used later to calculate incremental performance. +1
     # because the first value is the performance directly after initialization
     accuracy_results = pd.DataFrame(columns=range(n_queries_ + 1))
@@ -242,11 +233,16 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
     temp_X = X_.copy()
     temp_y = y_.copy()
 
+    oversampler = sv.AHC()
     # Keep track of feature importance during training.
     feat_importance_cons = pd.DataFrame([], columns=range(n_queries_ + 1), index=range(execs_ * k_))
 
     # Keep track of selection frequencies of individual trajectories
-    instance_freq = pd.DataFrame(0, index=range(execs_), columns=X_df.index)
+    if oversampled_:
+        X_samp, y_samp = oversampler.sample(temp_X, temp_y)
+        instance_freq = pd.DataFrame(0, index=range(execs_), columns=pd.DataFrame(X_samp).index)
+    else:
+        instance_freq = pd.DataFrame(0, index=range(execs_), columns=X_df.index)
 
     # trajectory_selection_frequencies = pd.DataFrame(0, index=range(n_initial), columns = X[0])
     model = ML_switcher.get(ml_method_)
@@ -254,7 +250,6 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
     # Perform K-fold validation for EXECUTIONS number of times.
     # This gives more total repetitions, and thus a smoother view of learning performance
     for execs in range(execs_):
-        weighted_risk = []
         # Take stratified folds to make sure each fold contains enough instances of the majority class
         skf = StratifiedKFold(n_splits=k_, shuffle=True)
         train_set_indices = np.array(list(skf.split(temp_X, temp_y)))
@@ -268,6 +263,8 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
 
             X_test = X_[train_set_indices[i][1]]
             y_test = y_[train_set_indices[i][1]]
+            if oversampled_:
+                X_train, y_train = oversampler.sample(X_train, y_train)
 
             for j in range(n_instantiations_):
 
@@ -298,7 +295,7 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
                         X_training=X_initial_, y_training=y_initial_
                     )
                     prediction = learner.predict(X_test)
-                elif al_method_ == 5:
+                elif al_method_ == 5:  # Hierarchical sampling with LogisticRegression model
                     model = libact.models.LogisticRegression(solver='liblinear', n_jobs=-1)
                     sub_qs = libact.query_strategies.UncertaintySampling(
                         dataset=ds, method='lc', model=model)
@@ -311,7 +308,7 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
                     model.train(ds)
                     # Make first set of predictions (before querying)
                     prediction = model.predict(X_test)
-                elif al_method_ == 6:
+                elif al_method_ == 6:  # QUIRE with Logistic Regression
                     model = libact.models.LogisticRegression(solver='liblinear', n_jobs=-1)
                     learner = libact.query_strategies.QUIRE(
                         dataset=ds,  # Dataset object
@@ -371,6 +368,8 @@ def run_AL_test(X_, y_, X_df, k_, execs_, n_queries_, n_instantiations_, X_initi
                 loss_history = [unqueried_loss_single]
 
                 for idx in range(n_queries_):
+                    if len(X_train) == 0:
+                        break
                     if al_method_ > 4:
                         query_idx = learner.make_query()
                         ds.update(query_idx, y_train[query_idx])
@@ -506,7 +505,7 @@ def aggregate_performance_measure_results(filepath_, agg_measure_results_):
     return agg_measure_results_
 
 
-def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_, al_dict_ = AL_switcher):
+def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_, al_dict_=AL_switcher):
     """
     Replots one performance metric for all datasets based on results stored in .pkl files.
     """
@@ -543,7 +542,9 @@ def read_and_replot_measure(exp_type_, exp_sub_type_, measure_, n_queries_, al_d
                                   file_path_='../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/',
                                   dataset_name_=dataset.name, al_method_=al_method, ml_method_=ml_method,
                                   al_dict_=al_dict_)
-            plot_bias([0,0,0,0,0,1,1,1,1,1], df, class_ratio, True, '../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/', 'Bias of ' + file_name,
+            plot_bias([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], df, class_ratio, True,
+                      '../Figures/' + exp_type_ + '/' + dataset.name + '/' + exp_sub_type_ + '/',
+                      'Bias of ' + file_name,
                       dataset_name_=dataset.name)
         plot_results(X, df, measure_, ML_results_fully_trained, measure_ + ' of ' + file_name, al_method,
                      ml_method, True, False, False,
@@ -618,7 +619,8 @@ def compare_results_single_dataset(all_dataset_results_, file_path_, measure_nam
                   save_=True, file_path_=file_path_, dataset_name_=dataset_name_)
 
 
-def ci_run_single_dataset(X_list, y_list, X_initial, y_initial, al_method, ml_method, X_df, ML_results_fully_trained, al_dict=AL_switcher):
+def ci_run_single_dataset(X_list, y_list, X_initial, y_initial, al_method, ml_method, X_df, ML_results_fully_trained,
+                          al_dict=AL_switcher):
     """
     Run class imbalance experiment with 4 levels of imbalance 'Original', 'Balanced', '75-25', '95-5'
     Stores results in form ../Results/Class_Imbalance/level of imbalance/performance_measure/dataset as .pkl file
@@ -628,13 +630,13 @@ def ci_run_single_dataset(X_list, y_list, X_initial, y_initial, al_method, ml_me
     subsets = ['Original', 'Balanced', '75-25', '95-5']
     original_class_ratio = round(Counter(y_list[0])[1] / (Counter(y_list[0])[0] + Counter(y_list[0])[1]), 3)
     for idx, X_data in enumerate(X_list):
-        print('Evaluating on ' + subsets[idx] + ' class ratio data using', AL_switcher2[al_method].__name__, 'and the',
+        print('Evaluating on ' + subsets[idx] + ' class ratio data using', AL_switcher[al_method].__name__, 'and the',
               type(ML_switcher[ml_method]).__name__, 'classifier')
         file_path = "../Figures/Class_Imbalance/" + dataset.name + '/' + subsets[idx] + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         run_AL_test(X_data, y_list[idx], X_df, k_=5, execs_=20, n_queries_=100,
-                    n_instantiations_=1,  X_initial_=X_initial, y_initial_=y_initial,
+                    n_instantiations_=1, X_initial_=X_initial, y_initial_=y_initial,
                     initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
                     al_method_=al_method, qbc_learners_=[2, 3],
                     n_qbc_learners_=4,
@@ -642,7 +644,24 @@ def ci_run_single_dataset(X_list, y_list, X_initial, y_initial, al_method, ml_me
                     prop_performance_=False,
                     file_path_=file_path,
                     ML_results_fully_trained_=ML_results_fully_trained,
-                    exp_subtype_=subsets[idx], al_dict_=al_dict)
+                    exp_subtype_=subsets[idx], al_dict_=al_dict, oversampled_=False)
+
+        print('Evaluating on ' + subsets[idx] + ' class ratio data using', AL_switcher[al_method].__name__, 'and the',
+              type(ML_switcher[ml_method]).__name__, 'classifier with AHC')
+        file_path = "../Figures/Class_Imbalance/" + dataset.name + '/' + subsets[idx] + ' Oversampled/'
+        if not os.path.exists(file_path):
+            os.makedirs(file_path)
+
+        run_AL_test(X_data, y_list[idx], X_df, k_=5, execs_=20, n_queries_=100,
+                    n_instantiations_=1, X_initial_=X_initial, y_initial_=y_initial,
+                    initial_ratio_=0.5, initial_size_=10, ml_method_=ml_method,
+                    al_method_=al_method, qbc_learners_=[2, 3],
+                    n_qbc_learners_=4,
+                    save_results_=True, normalize_data_=False,
+                    prop_performance_=False,
+                    file_path_=file_path,
+                    ML_results_fully_trained_=ML_results_fully_trained,
+                    exp_subtype_=subsets[idx], al_dict_=al_dict, oversampled_=True)
 
     all_dataset_results = read_dataset_results('../Results/Class_Imbalance/', 100, dataset.name)
 
@@ -756,7 +775,7 @@ def init_run_single_dataset(X, y, al_method, ml_method, X_df, ML_results_fully_t
             init_ratio) + '/'
         if not os.path.exists(file_path):
             os.makedirs(file_path)
-        #if init_ratio == 0.1:
+        # if init_ratio == 0.1:
 
         run_AL_test(X_list[idx], y_list[idx], X_df, k_=5, execs_=20, n_queries_=100,
                     n_instantiations_=1, X_initial_=X_initial_list[idx], y_initial_=y_initial_list[idx],
@@ -832,9 +851,9 @@ def run_openML_test(experiment_):
     and initial set ratio: class ratio of initial training set for active learning query strategies.
     """
     n_queries = 100
-    ml_method = 1
-    al_method = 2
-    al_dict = AL_switcher
+    ml_method = 4 # Set this to the chosen ML classifier from AL_Methods
+    al_method = 2 # Set this to the chosen AL method from AL_Methods
+    al_dict = AL_switcher # Choose between AL method list used for research question 1 or for 2 & 3
     global dataset
     global EXP_TYPE
     EXP_TYPE = experiment_
@@ -871,12 +890,12 @@ def plot_all(exp_type_, subsets_):
     """
     Replots all individual dataset results and average results of all datasets for a certain experiment.
     """
-    exp_name = exp_type_.replace('_', ' ') #'Accuracy', 'F1', 'Recall', 'Precision',"AUC", 'Loss Difference'
+    exp_name = exp_type_.replace('_', ' ')  # 'Accuracy', 'F1', 'Recall', 'Precision',"AUC", 'Loss Difference'
     if 'hierarchical_sampling' in subsets_:
         al_dict = AL_switcher2
     else:
         al_dict = AL_switcher
-    for measure in ['Accuracy', 'F1', 'Recall', 'Precision', "AUC","Label Ratio", 'Loss Difference']:
+    for measure in ['Accuracy', 'F1', 'Recall', 'Precision', "AUC", "Label Ratio", 'Loss Difference']:
         for subset in subsets_:
             al_method, ml_method = read_and_replot_measure(exp_type_=exp_type_, exp_sub_type_=subset, measure_=measure,
                                                            n_queries_=100, al_dict_=al_dict)
@@ -897,10 +916,12 @@ def plot_all(exp_type_, subsets_):
     plot_aggregate_results(exp_type_, agg_measure_results, al_method, ml_method, al_dict)
     plot_aggregate_comparison(exp_type_, agg_measure_results)
 
+
 def run_stat_test_alc():
-    subsets_al2 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'hierarchical_sampling', 'quire', 'albl']
+    subsets_al2 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'hierarchical_sampling', 'quire',
+                   'albl']
     # alc_list = [32.77759624609488, 34.041299206614774, 32.30998852894002, 29.667169761926395, 29.16396674151064, 29.70448805105728]
-    #plot_all(exp_type_='AL_Methods', subsets_=subsets_al1)
+    # plot_all(exp_type_='AL_Methods', subsets_=subsets_al1)
     auc_list = []
     for dataset in dataset_list:
         if dataset == 'kr-vs-kp':
@@ -909,7 +930,7 @@ def run_stat_test_alc():
         for query_strat in subsets_al2:
             df = pd.DataFrame(columns=range(100 + 1))
             df, file_name = dataset_performance_measure_results(
-                '../Results/AL_Methods/'+query_strat+'/AUC/', df, dataset)
+                '../Results/AL_Methods/' + query_strat + '/AUC/', df, dataset)
             auc_list.append(df)
         wsrt(auc_list, subsets_al2)
 
@@ -917,48 +938,45 @@ def run_stat_test_alc():
 if __name__ == "__main__":
     # Amount of instances per dataset [cylinder-bands:540, monks-problems-3:554, qsar-biodeg:1055, banknote-authentication:1372, steel-plates-fault:1941, scene:2407,
     # ozone-level-8hr:2534, jasmine: 2984, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
-    #'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'scene', 'ozone-level-8hr', 'jasmine',
-    dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault',
-                    'scene', 'ozone-level-8hr', 'jasmine','kr-vs-kp', 'Bioresponse','spambase', 'wilt','churn',
-                    'mushroom','PhishingWebsites']
-    #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault',
-    #                'scene', 'ozone-level-8hr', 'jasmine'] #QUIRE list
-    # To plot aggregate results
+    # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'scene', 'ozone-level-8hr', 'jasmine',
+
+    # 1005,969, 'haberman', 'monks-problems-3', 'qsar-biodeg',
+    dataset_list_thesis = ['hill-valley', 'banknote-authentication', 'steel-plates-fault',
+                           'scene', 'ozone-level-8hr', 'jasmine', 'kr-vs-kp', 'Bioresponse', 'spambase', 'wilt',
+                           'churn',
+                           'mushroom', 'PhishingWebsites']  # Datasets used in master's thesis
+    dataset_list_quire = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication',
+                          'steel-plates-fault',
+                          'scene', 'ozone-level-8hr', 'jasmine']  # Datasets used for QUIRE
+    dataset_list_comp = [1005, 969, 'haberman']  # Datasets used for comparison experiments with Kovacs2019
+
+    dataset_list = dataset_list_comp
+
+    ecoli_df = pd.read_csv('../Data/ecoli-0_vs_1.csv',
+                           header=None, sep=',',
+                           engine='python')  # Ecoli only readable through csv, need to run separately
+    df_name = 'ecoli-0_vs_1'
+
+    # To plot aggregate results uncomment below
     # agg_measure_results = read_aggregate_results('../Results/AL_Methods/', 100)
     # plot_aggregate_results('AL_Methods', agg_measure_results, 2, 1, AL_switcher)
     # plot_aggregate_comparison('AL_Methods', agg_measure_results)
 
     # Main experiments
-    #determine_initial_set_init_exp()
-    #run_openML_test(experiment_='Class_Imbalance')
-    #run_openML_test(experiment_='AL_Methods')
-    #run_openML_test(experiment_='ML_Methods')
-    #run_openML_test(experiment_='AL_Methods')
-    #dataset_list = ['monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault',
-    #                'jasmine', 'scene', 'ozone-level-8hr']  # List for QUIRE
-    #run_openML_test(experiment_='Class_Imbalance')
-
-    #run_openML_test(experiment_='Initial_Class_Ratio')
+    # determine_initial_set_init_exp()
+    run_openML_test(experiment_='Class_Imbalance')
 
     # Replot single
-    #subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
-    #subsets_ci = ['75-25', '95-5', 'Balanced', 'Original']
-    #subsets_ml = ['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier']
-    #subsets_init = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
+    # subsets_al1 = ['random_sampling', 'uncertainty_sampling', 'density_sampling', 'qbc_sampling']
+    # subsets_ci = ['75-25', '95-5', 'Balanced', 'Original']
+    # subsets_ml = ['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier']
+    # subsets_init = ['Initial class ratio 0.1', 'Initial class ratio 0.5', 'Initial class ratio 0.25']
     # for subset in subsets_ci:
     #    al_method, ml_method = read_and_replot_measure(exp_type_='Class_Imbalance', exp_sub_type_=subset, measure_='Label Ratio',
     #                                                   n_queries_=100)
-    print('test')
-    subsets_al2 = ['hierarchical_sampling', 'quire', 'albl']
+    # print('test')
+    # subsets_al2 = ['hierarchical_sampling', 'quire', 'albl']
 
-    plot_all(exp_type_='AL_Methods', subsets_=subsets_al2)
-
+    # plot_all(exp_type_='AL_Methods', subsets_=subsets_al2)
 
     print('Done')
-# 'density_sampling_WF0_same_sum_maj_100__new_freq',
-# result_strings = ['density_sampling_WF0_same_sum_maj_100__new_freq', 'uncertainty_sampling_spambase, class ratio 1,n_queries 100 _freq']
-# thresholds = [2,2]
-# for i, string in enumerate(result_strings):
-#    traj_freq_matrix = pd.read_pickle("../Results/" + string + ".pkl")
-#    print(traj_freq_matrix)
-#    plot_heatmap(traj_freq_matrix, threshold = thresholds[i], bin_size = 2, name = string, target_ids = [])

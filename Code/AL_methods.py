@@ -14,7 +14,7 @@ from modAL.utils.selection import shuffled_argmax
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
-
+from sklearn.neighbors import KNeighborsClassifier
 
 # from pip command
 
@@ -101,7 +101,8 @@ def r_pure(classifier, X_pool):
 ML_switcher = {
     1: LogisticRegression(solver='liblinear', n_jobs=-1),
     2: xgboost.XGBClassifier(booster='dart',tree_method='hist'),
-    3: RandomForestClassifier()
+    3: RandomForestClassifier(),
+    4: KNeighborsClassifier()
 }
 
 # Switcher for selecting the desired AL method
@@ -113,12 +114,10 @@ AL_switcher = {
 }
 
 AL_switcher2 = {
-    #1: random_sampling,
-    #2: uncertainty_sampling,
-    #3: density_sampling,
+    1: random_sampling,
+    2: uncertainty_sampling,
+    3: density_sampling,
     5: hierarchical_sampling,
     6: quire,
-    #7: r_lure,
-    #8: r_pure,
     7: albl
 }
