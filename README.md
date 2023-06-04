@@ -1,6 +1,6 @@
 # AL_OpenML_Experiments
 
-This repository contains the code used for the master's thesis on Sampling Bias in Active Learning and its Influence on Operational Classification Performance. 
+This repository contains the code used for the master's thesis on "Sampling Bias in Active Learning and its Influence on Operational Classification Performance". 
 In order to run a configuration of the experimental pipeline please do the following:
 
 1. After cloning the project, please install all packages listed in the requirements.txt file
