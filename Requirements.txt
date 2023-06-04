@@ -1,0 +1,13 @@
+pip install --upgrade pip
+pip install -U scikit-learn
+pip install matplotlib
+pip install openml
+pip install seaborn
+pip install imblearn
+pip install modAL
+pip install numba
+pip install xgboost
+pip install plotly
+pip install -U kaleido
+pip install libact
+pip install imgkit
