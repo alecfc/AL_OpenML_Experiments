@@ -940,7 +940,6 @@ if __name__ == "__main__":
     # ozone-level-8hr:2534, jasmine: 2984, kr-vs-kp:3196, Bioresponse:3751, wilt:4839, churn:5000, spambase:4601, mushroom:8124, PhishingWebsites:11055, electricity:45300, creditcard:285000]
     # 'monks-problems-3', 'qsar-biodeg', 'hill-valley', 'banknote-authentication', 'steel-plates-fault', 'scene', 'ozone-level-8hr', 'jasmine',
 
-    # 1005,969, 'haberman', 'monks-problems-3', 'qsar-biodeg',
     dataset_list_thesis = ['hill-valley', 'banknote-authentication', 'steel-plates-fault',
                            'scene', 'ozone-level-8hr', 'jasmine', 'kr-vs-kp', 'Bioresponse', 'spambase', 'wilt',
                            'churn',
